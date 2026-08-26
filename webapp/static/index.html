@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+<meta charset="UTF-8">
+<title>SYNOPTYK-ARCTIC — Dashboard</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg: #0b0f14;
+    --panel: #111823;
+    --panel-border: #1f2b3a;
+    --text: #d8e2ec;
+    --muted: #7b8ca0;
+    --accent: #4fd1c5;
+    --accent-dim: #2b6f68;
+    --warn-bg: #2a1a0a;
+    --warn-border: #7a4a12;
+    --warn-text: #f0b060;
+    --ok: #4fd18a;
+    --mono: "Consolas", "Menlo", "Courier New", monospace;
+  }
+  * { box-sizing: border-box; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--mono);
+    margin: 0;
+    padding: 24px;
+    line-height: 1.5;
+  }
+  h1 { font-size: 20px; margin: 0 0 4px 0; }
+  h2 { font-size: 15px; margin: 0 0 12px 0; color: var(--accent); text-transform: uppercase; letter-spacing: 0.04em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 20px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 16px; margin-bottom: 20px; }
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--panel-border);
+    border-radius: 6px;
+    padding: 16px;
+  }
+  .stat { display: flex; justify-content: space-between; padding: 4px 0; font-size: 13px; border-bottom: 1px dashed var(--panel-border); }
+  .stat:last-child { border-bottom: none; }
+  .stat .v { color: var(--text); font-weight: bold; }
+  .stat .k { color: var(--muted); }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; }
+  .warn-banner {
+    background: var(--warn-bg);
+    border: 1px solid var(--warn-border);
+    color: var(--warn-text);
+    padding: 10px 14px;
+    border-radius: 6px;
+    font-size: 13px;
+    margin-bottom: 12px;
+  }
+  .empty-note { color: var(--muted); font-size: 13px; padding: 12px 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; margin-top: 8px; }
+  th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--panel-border); }
+  th:first-child, td:first-child { text-align: left; }
+  th { color: var(--muted); font-weight: normal; }
+  canvas { max-height: 260px; }
+  #refresh-btn {
+    background: var(--accent-dim);
+    color: var(--text);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 6px 14px;
+    font-family: var(--mono);
+    cursor: pointer;
+    font-size: 12px;
+  }
+  #refresh-btn:hover { background: var(--accent); color: #08110f; }
+  footer { color: var(--muted); font-size: 11px; margin-top: 24px; border-top: 1px solid var(--panel-border); padding-top: 12px; }
+</style>
+</head>
+<body>
+
+<h1>🧊 SYNOPTYK-ARCTIC — Dashboard</h1>
+<div class="sub">Longyearbyen, Svalbard &mdash; dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).</div>
+
+<div class="grid">
+  <div class="panel" id="status-panel">
+    <h2>Status stacji</h2>
+    <div id="status-body">ładowanie…</div>
+  </div>
+  <div class="panel">
+    <h2>Odśwież</h2>
+    <div class="empty-note">Dane pochodzą z <code>arctic_forecast_snapshots.csv</code>. Uruchom <code>run_arctic.py</code> na laptopie, żeby dopisać kolejny dzień, potem kliknij odśwież.</div>
+    <button id="refresh-btn" onclick="loadAll()">↻ Odśwież teraz</button>
+  </div>
+</div>
+
+<div class="panel" style="margin-bottom:20px;">
+  <h2>Trafność prognozy — dane REALNE (bias/MAE per lead_days)</h2>
+  <div id="real-bias-note" class="empty-note"></div>
+  <canvas id="real-chart"></canvas>
+  <table id="real-table"><thead><tr><th>lead_days</th><th>n (par)</th><th>bias °C</th><th>MAE °C</th><th>status</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="panel">
+  <h2>Demo — dane SYNTETYCZNE (mechanizm, nie pomiar)</h2>
+  <div class="warn-banner">⚠️ Poniższe liczby pochodzą z <code>demo_synthetic_arctic_snapshots.csv</code> — wygenerowane sztucznie przez <code>demo_synthetic_fill.py</code>, żeby pokazać kształt wyniku, gdy danych już wystarczy. To NIE jest pomiar rzeczywistej trafności stacji Longyearbyen.</div>
+  <div id="demo-bias-note" class="empty-note"></div>
+  <canvas id="demo-chart"></canvas>
+</div>
+
+<footer>
+  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/status, /api/real_bias, /api/demo_bias
+</footer>
+
+<script>
+let realChart, demoChart;
+
+async function getJSON(url) {
+  const r = await fetch(url, { cache: "no-store" });
+  return r.json();
+}
+
+function renderStatus(s) {
+  const el = document.getElementById("status-body");
+  const staleBadge = s.staleness_label_pl
+    ? `<span class="badge">${s.staleness_label_pl}</span>`
+    : `<span class="badge">brak danych</span>`;
+  el.innerHTML = `
+    <div class="stat"><span class="k">Stacja</span><span class="v">${s.station}</span></div>
+    <div class="stat"><span class="k">Współrzędne</span><span class="v">${s.lat}, ${s.lon}</span></div>
+    <div class="stat"><span class="k">Wierszy w CSV</span><span class="v">${s.n_rows_real}</span></div>
+    <div class="stat"><span class="k">Dni zebranych</span><span class="v">${s.n_days_collected}</span></div>
+    <div class="stat"><span class="k">Ostatnie pobranie</span><span class="v">${s.last_issue_date ?? "—"}</span></div>
+    <div class="stat"><span class="k">Świeżość</span><span class="v">${staleBadge}</span></div>
+    <div class="stat"><span class="k">Próg min_samples</span><span class="v">${s.min_samples_required}</span></div>
+  `;
+}
+
+function renderRealBias(data) {
+  const leads = Array.from({length: 7}, (_, i) => i);
+  const note = document.getElementById("real-bias-note");
+  const nOfficial = Object.keys(data.official).length;
+  note.textContent = nOfficial === 0
+    ? "Za mało danych na żaden lead_days jeszcze (potrzeba >= " + data.min_samples + " sparowanych dni). To oczekiwane na starcie, nie błąd."
+    : `${nOfficial} / 7 wartości lead_days ma już >= ${data.min_samples} par.`;
+
+  const tbody = document.querySelector("#real-table tbody");
+  tbody.innerHTML = "";
+  leads.forEach(lead => {
+    const n = data.raw_counts[lead] ?? 0;
+    const off = data.official[lead];
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${lead}</td><td>${n}</td><td>${off ? off.bias.toFixed(2) : "—"}</td><td>${off ? off.mae.toFixed(2) : "—"}</td><td>${off ? "✅ oficjalny" : "⏳ za mało (n<" + data.min_samples + ")"}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  const biasVals = leads.map(l => data.official[l] ? data.official[l].bias : null);
+  if (realChart) realChart.destroy();
+  realChart = new Chart(document.getElementById("real-chart"), {
+    type: "line",
+    data: { labels: leads, datasets: [{ label: "bias °C (realne, tylko gdy n>=" + data.min_samples + ")", data: biasVals, borderColor: "#4fd1c5", spanGaps: false }] },
+    options: { scales: { y: { title: { display: true, text: "°C" } }, x: { title: { display: true, text: "lead_days" } } } }
+  });
+}
+
+function renderDemoBias(data) {
+  const note = document.getElementById("demo-bias-note");
+  if (data.error) {
+    note.textContent = data.error;
+    if (demoChart) { demoChart.destroy(); demoChart = null; }
+    return;
+  }
+  note.textContent = data.disclaimer;
+  const leads = Array.from({length: 7}, (_, i) => i);
+  const biasVals = leads.map(l => data.bias[l] ? data.bias[l].bias : null);
+  const maeVals = leads.map(l => data.bias[l] ? data.bias[l].mae : null);
+  if (demoChart) demoChart.destroy();
+  demoChart = new Chart(document.getElementById("demo-chart"), {
+    type: "line",
+    data: {
+      labels: leads,
+      datasets: [
+        { label: "bias °C [DEMO]", data: biasVals, borderColor: "#f0b060", spanGaps: false },
+        { label: "MAE °C [DEMO]", data: maeVals, borderColor: "#e05a5a", spanGaps: false, borderDash: [4,4] },
+      ]
+    },
+    options: { scales: { y: { title: { display: true, text: "°C" } }, x: { title: { display: true, text: "lead_days" } } } }
+  });
+}
+
+async function loadAll() {
+  const [s, rb, db] = await Promise.all([
+    getJSON("/api/status"),
+    getJSON("/api/real_bias"),
+    getJSON("/api/demo_bias"),
+  ]);
+  renderStatus(s);
+  renderRealBias(rb);
+  renderDemoBias(db);
+}
+
+loadAll();
+</script>
+</body>
+</html>
