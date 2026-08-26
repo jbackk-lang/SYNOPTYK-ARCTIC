@@ -242,15 +242,34 @@ z wielu miesięcy historii jednym zapytaniem, zamiast czekać tygodniami.
 python backtest_real.py 90    # 90 dni prawdziwej historii Longyearbyen
 ```
 
-**Status: nie zweryfikowane jeszcze na prawdziwej odpowiedzi API.** Sandbox
-deweloperski ma zablokowany dostęp do `previous-runs-api.open-meteo.com`
-(ten sam problem co dla `archive-api.open-meteo.com`) — parsowanie w
-`previous_runs.py` jest oparte wyłącznie na udokumentowanym kształcie
-odpowiedzi. Testy (`test_previous_runs.py`) używają ręcznie zbudowanego
-payloadu zgodnego z dokumentacją, nie prawdziwej próbki. Pierwsze
-uruchomienie na laptopie jest testem tej hipotezy — jeśli kształt
-odpowiedzi okaże się inny (błąd `KeyError`, same puste wyniki), to sygnał
-do poprawki parsera, nie dowód, że metoda jest zła.
+**Status: zweryfikowane na prawdziwej odpowiedzi API 2026-08-27** — parser
+zadziałał bez poprawek, zgodnie z udokumentowanym kształtem odpowiedzi.
+Wynik pierwszego uruchomienia (90 dni, Longyearbyen, Best Match — patrz
+zastrzeżenie niżej):
+
+| lead_days | n | bias °C | MAE °C |
+|---|---|---|---|
+| 1 | 90 | +0.28 | 0.48 |
+| 2 | 90 | +0.28 | 0.69 |
+| 3 | 90 | +0.35 | 0.81 |
+| 4 | 90 | +0.15 | 0.93 |
+| 5 | 90 | +0.06 | 1.30 |
+| 6 | 90 | -0.14 | 1.74 |
+| 7 | 90 | -0.33 | 1.76 |
+
+MAE rośnie z lead_days (0.48°C → 1.76°C) — zgodne z oczekiwanym spadkiem
+trafności prognozy wraz z horyzontem, dobry sygnał, że metoda mierzy
+prawdziwe zjawisko, nie artefakt. Bias zmienia znak między lead_days 5 i
+6 (niedoszacowanie → przeszacowanie) — może być realny efekt modelu, może
+zbieg okoliczności dla tego konkretnego okna/lokalizacji; **jedno
+90-dniowe okno jednej stacji arktycznej, nie generalny wniosek o
+Open-Meteo**. Liczby będą się zmieniać przy kolejnych uruchomieniach (inne
+okno czasowe) — traktować jako punkt odniesienia, nie stałą.
+
+Testy (`test_previous_runs.py`) nadal używają ręcznie zbudowanego
+payloadu (zgodnego z dokumentacją, teraz też potwierdzonego realną
+odpowiedzią) — nie zapisano surowej odpowiedzi API jako fixture, bo
+`backtest_real.py` był uruchomiony poza tym środowiskiem.
 
 ### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
 

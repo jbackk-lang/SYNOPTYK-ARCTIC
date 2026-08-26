@@ -12,15 +12,15 @@ prognoz vs rzeczywistość, więc wynik jest natychmiastowy — ale nadal dla
 konkretnego, historycznego okna (nie dowodzi nic o przyszłych prognozach,
 które `run_arctic.py` musi nadal zbierać na bieżąco).
 
-WAŻNE — nie zweryfikowane jeszcze na prawdziwej odpowiedzi API. Sandbox ma
+Zweryfikowane na prawdziwej odpowiedzi API 2026-08-27 (`backtest_real.py`,
+90 dni, Longyearbyen) — parsowanie zadziałało bez poprawek, zgodnie z
+udokumentowanym kształtem odpowiedzi (godzinowe pola
+`temperature_2m_previous_dayN`, N=1..7). Sandbox deweloperski nadal ma
 zablokowany dostęp do `previous-runs-api.open-meteo.com` (ten sam problem
-co dla `archive-api.open-meteo.com`, patrz README) — parsowanie poniżej
-jest oparte WYŁĄCZNIE na udokumentowanym kształcie odpowiedzi (godzinowe
-pola `temperature_2m_previous_dayN`, N=1..7), nie na realnej próbce.
-Pierwsze uruchomienie `backtest_real.py` na laptopie jest testem tej
-hipotezy, nie gotowym wynikiem — jeśli kształt odpowiedzi okaże się inny
-(np. inne nazwy pól, brak `hourly`), zgłosić: to będzie wymagało poprawki
-parsera, nie oznacza błędu w metodzie.
+co dla `archive-api.open-meteo.com`, patrz README) — testy jednostkowe
+(`test_previous_runs.py`) używają ręcznie zbudowanego payloadu, nie
+zapisanej realnej odpowiedzi (nie zapisano jej jako fixture, bo
+uruchomienie było poza tym środowiskiem).
 """
 from __future__ import annotations
 

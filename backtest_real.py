@@ -9,11 +9,11 @@ API — ta sama reanaliza co używana w `run_arctic.py`/`bias.py`). Liczy
 bias/MAE per lead_days na gotowym, historycznym oknie (domyślnie 90 dni)
 zamiast czekać tygodniami na codzienne zbieranie przez `run_arctic.py`.
 
-UWAGA: parsowanie Previous Runs API (`arctic_synoptyk/previous_runs.py`)
-nie było jeszcze zweryfikowane na prawdziwej odpowiedzi — to pierwsze
-uruchomienie jest testem tej hipotezy. Jeśli dostaniesz błąd KeyError
-albo same puste wyniki, to znak, że kształt odpowiedzi różni się od
-udokumentowanego — zgłoś, co dokładnie zwróciło, żeby poprawić parser.
+Zweryfikowane na prawdziwej odpowiedzi API 2026-08-27 (90 dni,
+Longyearbyen) - zadzialalo bez poprawek, wynik w README ("Etap 4").
+Jesli mimo to dostaniesz blad KeyError albo same puste wyniki, to znak,
+ze ksztalt odpowiedzi Open-Meteo sie zmienil od tego czasu - zglos, co
+dokladnie zwrocilo API.
 
 Użycie:
     python backtest_real.py [liczba_dni]
