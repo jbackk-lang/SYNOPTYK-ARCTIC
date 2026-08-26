@@ -27,6 +27,7 @@ widoczny w wyniku. Naprawiono: najpierw generujemy JEDNA rzeczywista
 temperature per target_date, potem dla kazdego (issue_date, lead) liczymy
 prognoze wzgledem TEJ SAMEJ wartosci.
 """
+import argparse
 import random
 from datetime import date, timedelta
 
@@ -86,10 +87,16 @@ def generate_demo_csv(n_days: int = 21, seed: int = 42) -> None:
 
 
 if __name__ == "__main__":
-    print("=== DEMO / DANE SYNTETYCZNE - NIE realny pomiar stacji arktycznej ===")
-    generate_demo_csv()
+    parser = argparse.ArgumentParser(description="Demo/symulacja mechanizmu compute_lead_bias() na zmyslonych danych.")
+    parser.add_argument("n_days", nargs="?", type=int, default=21,
+                         help="liczba symulowanych dni (domyslnie 21; wieksze wartosci = wieksza probka n, "
+                              "wciaz ZMYSLONA, nie prawdziwy pomiar)")
+    args = parser.parse_args()
+
+    print(f"=== DEMO / DANE SYNTETYCZNE ({args.n_days} dni) - NIE realny pomiar stacji arktycznej ===")
+    generate_demo_csv(n_days=args.n_days)
     bias = compute_lead_bias(DEMO_CSV, STATION, min_samples=5)
-    print(f"Wygenerowano {DEMO_CSV} (21 symulowanych dni x 7 lead_days).\n")
+    print(f"Wygenerowano {DEMO_CSV} ({args.n_days} symulowanych dni x 7 lead_days).\n")
     print("Zamierzony (zmyslony) wzorzec: bias(lead) = 1.2 - 0.35*lead\n")
     print("Wynik compute_lead_bias() na danych SYNTETYCZNYCH (demo mechanizmu, nie pomiar):")
     for lead in sorted(bias):

@@ -113,20 +113,21 @@ webapp/
 run_dashboard.bat       — uruchamia dashboard www
 arctic_forecast_snapshots.csv         — realne dane z bieżących uruchomień
 demo_synthetic_arctic_snapshots.csv   — syntetyczne dane demo, osobno od realnych
-tests/                  — 39 testów, w tym na fixtures z prawdziwego API
+backtest_real.py        — realny backtest historyczny (Previous Runs API), uruchamiać lokalnie
+tests/                  — 45 testów, w tym na fixtures z prawdziwego API
 ```
 
 ## Instalacja i uruchomienie
 
 ```bash
 pip install -r requirements.txt
-pytest -v                   # 39 testów
+pytest -v                   # 45 testów
 python run_arctic.py        # codzienne pobranie + log (uruchamiać lokalnie)
 ```
 
 ## Status testów
 
-39/39 testów przechodzi — w tym 4 bezpośrednio na prawdziwych odpowiedziach
+45/45 testów przechodzi — w tym 4 bezpośrednio na prawdziwych odpowiedziach
 API z 2026-08-26 (`test_fetch.py`).
 
 ## Etap 3 — dashboard www (lokalna appka)
@@ -220,3 +221,65 @@ niż ostatnie udane połączenie. Dla Arktyki to złe założenie.
 - Brak mechanizmu wysyłki zaległych danych po odzyskaniu łączności —
   `unsynced_since()` zwraca listę do wysłania, ale nic jej jeszcze nie
   konsumuje.
+
+## Etap 4 — backtest historyczny (realny i symulowany)
+
+`run_arctic.py` zbiera dane na bieżąco (tygodnie do pierwszego wyniku).
+Dwa dodatkowe narzędzia dają wgląd w trafność szybciej — jedno na
+prawdziwej historii, drugie na w pełni zmyślonych danych. Oba są jawnie
+opisane co do statusu, żeby nie dało się ich pomylić.
+
+### `backtest_real.py` — prawdziwa historia z Open-Meteo, natychmiastowa
+
+Open-Meteo ma **Previous Runs API**
+(`previous-runs-api.open-meteo.com`) — archiwum prognoz sprzed lat na
+stałych lead_days (1–7 dni), zaprojektowane właśnie do oceny skuteczności
+prognoz w czasie. `arctic_synoptyk/previous_runs.py` pobiera to i paruje
+z `fetch_archive()` (rzeczywistość) — daje realny bias/MAE per lead_days
+z wielu miesięcy historii jednym zapytaniem, zamiast czekać tygodniami.
+
+```bash
+python backtest_real.py 90    # 90 dni prawdziwej historii Longyearbyen
+```
+
+**Status: zweryfikowane na prawdziwej odpowiedzi API 2026-08-27** — parser
+zadziałał bez poprawek, zgodnie z udokumentowanym kształtem odpowiedzi.
+Wynik pierwszego uruchomienia (90 dni, Longyearbyen, Best Match — patrz
+zastrzeżenie niżej):
+
+| lead_days | n | bias °C | MAE °C |
+|---|---|---|---|
+| 1 | 90 | +0.28 | 0.48 |
+| 2 | 90 | +0.28 | 0.69 |
+| 3 | 90 | +0.35 | 0.81 |
+| 4 | 90 | +0.15 | 0.93 |
+| 5 | 90 | +0.06 | 1.30 |
+| 6 | 90 | -0.14 | 1.74 |
+| 7 | 90 | -0.33 | 1.76 |
+
+MAE rośnie z lead_days (0.48°C → 1.76°C) — zgodne z oczekiwanym spadkiem
+trafności prognozy wraz z horyzontem, dobry sygnał, że metoda mierzy
+prawdziwe zjawisko, nie artefakt. Bias zmienia znak między lead_days 5 i
+6 (niedoszacowanie → przeszacowanie) — może być realny efekt modelu, może
+zbieg okoliczności dla tego konkretnego okna/lokalizacji; **jedno
+90-dniowe okno jednej stacji arktycznej, nie generalny wniosek o
+Open-Meteo**. Liczby będą się zmieniać przy kolejnych uruchomieniach (inne
+okno czasowe) — traktować jako punkt odniesienia, nie stałą.
+
+Testy (`test_previous_runs.py`) nadal używają ręcznie zbudowanego
+payloadu (zgodnego z dokumentacją, teraz też potwierdzonego realną
+odpowiedzią) — nie zapisano surowej odpowiedzi API jako fixture, bo
+`backtest_real.py` był uruchomiony poza tym środowiskiem.
+
+### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
+
+```bash
+python demo_synthetic_fill.py 90    # 90 symulowanych dni zamiast domyślnych 21
+```
+
+Generuje w pełni sztuczne dane (`demo_synthetic_arctic_snapshots.csv`,
+stacja `Longyearbyen_Svalbard_DEMO`) z zamierzonym wzorcem obciążenia
+(`bias(lead) = 1.2 − 0.35·lead`) i pokazuje, że `compute_lead_bias()`
+poprawnie go odtwarza przy większej próbce (n=90 zamiast n=21 zbliża
+wynik do zamierzonych wartości). To demo MECHANIZMU, nie prognoza
+niczego o Longyearbyen — każdy wiersz i wydruk jest tagowany `[DEMO]`.
