@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+/arctic_forecast_result.json
+/arctic_archive_result.json
