@@ -51,8 +51,17 @@ def main():
             e = bias[lead]
             print(f"  lead_days={lead}: bias={e['bias']:+.2f} MAE={e['mae']:.2f} n={e['n']}")
     else:
+        raw = compute_lead_bias(CSV_PATH, station_name, min_samples=1)
         print("Korekta jeszcze niedostepna - za malo sparowanych dni w CSV "
               "(potrzeba min. 5 par na dany lead_days, patrz README).")
+        if raw:
+            print("Dotychczasowy postep (surowe liczniki n, NIE wynik trafnosci):")
+            for lead in sorted(raw):
+                print(f"  lead_days={lead}: n={raw[lead]['n']} / 5")
+        else:
+            print("Jeszcze zero sparowanych dni (prognoza vs. pozniejsze archiwum "
+                  "dla tej samej daty) - normalne w pierwszych ~2 dniach zbierania, "
+                  "patrz README ('dlaczego archiwum wyklucza ostatnie 2 dni').")
 
 
 if __name__ == "__main__":

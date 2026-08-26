@@ -64,6 +64,36 @@ uruchamiania). Żeby dostać wynik dla Svalbardu, trzeba uruchamiać
 **Nie sprawdzone:** zachowanie w okresie nocy polarnej (listopad–luty) —
 obecne dane pokrywają tylko letnie okno.
 
+### Historia poprawek: dwa bugi znalezione na realnym użyciu (2026-08-27)
+
+Pierwsze wielokrotne uruchomienie `run_arctic.py` tego samego dnia dało
+`lead_days=0: bias=+0.00 MAE=0.00 n=5` — wygląda podejrzanie idealnie, i
+faktycznie było błędem, nie dobrym wynikiem:
+
+1. **Duplikacja wierszy.** `append_snapshot()` nie sprawdzało, czy dany
+   wiersz (`station`, `target_date`, `issue_date`, `source`) już istnieje
+   w CSV — każde uruchomienie skryptu tego samego dnia dopisywało te same
+   dane ponownie. `n=5` to był w rzeczywistości **jeden** dzień
+   zduplikowany 5×, nie 5 niezależnych dni. Naprawione: `append_snapshot()`
+   jest teraz idempotentne po tym kluczu (test:
+   `test_snapshots.py::test_append_same_day_twice_is_idempotent`).
+2. **Archiwum Open-Meteo dla ostatnich ~2 dni nie jest sfinalizowaną
+   reanalizą** — zwraca praktycznie tę samą liczbę co model prognozy,
+   bo prawdziwa obserwacja/reanaliza dla tak świeżej daty jeszcze nie
+   jest gotowa (ten sam efekt opisany dla Krakowa: "Open-Meteo Archive
+   API ma opóźnienie ~1–2 dni"). Efekt: prognoza i "rzeczywistość" dla
+   `lead_days=0` porównywały się same ze sobą, stąd idealne 0.00.
+   Naprawione: `fetch_archive()` ma teraz `exclude_trailing_days=2`
+   (domyślnie), odcinający najświeższe dni przed zwróceniem wyniku (test:
+   `test_fetch.py::test_fetch_archive_excludes_trailing_unreliable_days`).
+
+Istniejący `arctic_forecast_snapshots.csv` wyczyszczono (usunięto
+duplikaty i wiersze archiwalne z niesfinalizowanego okna) — po tej
+korekcie CSV ma znowu 0 sparowanych dni (`compute_lead_bias()` zwraca
+puste), co jest teraz **poprawnym**, uczciwym stanem, a nie regresem:
+pierwsze prawdziwe pary (prognoza vs. archiwum sprzed ≥2 dni dla tej
+samej daty) pojawią się po kolejnych ~2 dniach regularnego uruchamiania.
+
 ## Struktura repo
 
 ```
@@ -83,20 +113,20 @@ webapp/
 run_dashboard.bat       — uruchamia dashboard www
 arctic_forecast_snapshots.csv         — realne dane z bieżących uruchomień
 demo_synthetic_arctic_snapshots.csv   — syntetyczne dane demo, osobno od realnych
-tests/                  — 35 testów, w tym na fixtures z prawdziwego API
+tests/                  — 39 testów, w tym na fixtures z prawdziwego API
 ```
 
 ## Instalacja i uruchomienie
 
 ```bash
 pip install -r requirements.txt
-pytest -v                   # 35 testów
+pytest -v                   # 39 testów
 python run_arctic.py        # codzienne pobranie + log (uruchamiać lokalnie)
 ```
 
 ## Status testów
 
-35/35 testów przechodzi — w tym 4 bezpośrednio na prawdziwych odpowiedziach
+39/39 testów przechodzi — w tym 4 bezpośrednio na prawdziwych odpowiedziach
 API z 2026-08-26 (`test_fetch.py`).
 
 ## Etap 3 — dashboard www (lokalna appka)
