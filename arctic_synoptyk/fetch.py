@@ -20,6 +20,7 @@ Synoptyk-v2.0 dla Krakowa. To świadoma różnica, nie przeoczenie:
 """
 from __future__ import annotations
 
+from datetime import date, datetime, timedelta
 from typing import Any
 
 import requests
@@ -78,12 +79,42 @@ def fetch_forecast(station: ArcticStation, forecast_days: int = 7, timeout: floa
     return _parse_daily_response(r.json())
 
 
-def fetch_archive(station: ArcticStation, past_days: int = 10, timeout: float = 20.0) -> list[dict[str, Any]]:
-    """Pobiera zarejestrowaną historię (past_days wstecz od dziś)."""
+def fetch_archive(
+    station: ArcticStation,
+    past_days: int = 10,
+    timeout: float = 20.0,
+    exclude_trailing_days: int = 2,
+    _today: date | None = None,
+) -> list[dict[str, Any]]:
+    """Pobiera zarejestrowaną historię (past_days wstecz od dziś).
+
+    `exclude_trailing_days` (domyślnie 2) odcina najświeższe dni z odpowiedzi
+    przed zwróceniem - Open-Meteo Archive API zwraca dane aż do dziś, ale dla
+    ostatnich ~1-2 dni to jeszcze nie jest sfinalizowana reanaliza, tylko
+    dane praktycznie identyczne z modelem prognozy (ten sam problem
+    udokumentowany dla Krakowa w README: "Open-Meteo Archive API ma
+    opóźnienie ~1-2 dni"). Znalezione empirycznie tutaj: pierwsze prawdziwe
+    porównanie prognoza-vs-archiwum dla lead_days=0 dało bias=0.00, MAE=0.00
+    dokładnie dlatego, że oba źródła zwracały tę samą, jeszcze
+    niesfinalizowaną liczbę - nie dlatego, że prognoza była idealna. Bez
+    tego obcięcia `compute_lead_bias()` liczyłby korektę na parach, które
+    nie są niezależnym porównaniem prognoza/rzeczywistość.
+
+    `_today` - tylko do testów (żeby nie zależeć od zegara systemowego)."""
     url = (
         f"{ARCHIVE_BASE_URL}?latitude={station.lat}&longitude={station.lon}"
         f"&daily={_DAILY_FIELDS}&past_days={past_days}&timezone=UTC"
     )
     r = requests.get(url, timeout=timeout)
     r.raise_for_status()
-    return _parse_daily_response(r.json())
+    rows = _parse_daily_response(r.json())
+
+    if exclude_trailing_days <= 0:
+        return rows
+
+    today = _today if _today is not None else date.today()
+    cutoff = today - timedelta(days=exclude_trailing_days - 1)
+    return [
+        row for row in rows
+        if datetime.strptime(row["date"], "%Y-%m-%d").date() < cutoff
+    ]

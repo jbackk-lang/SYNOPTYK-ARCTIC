@@ -62,3 +62,38 @@ def test_source_field_recorded():
         with open(csv_path, newline="", encoding="utf-8") as f:
             rows = list(csv.DictReader(f))
         assert all(r["source"] == "archiwum_openmeteo" for r in rows)
+
+
+def test_append_same_day_twice_is_idempotent():
+    """Rdzen bugu znalezionego na realnym uzyciu: uruchomienie run_arctic.py
+    kilka razy tego samego dnia (ten sam issue_date) NIE powinno dopisywac
+    tych samych wierszy ponownie - inaczej n w compute_lead_bias() rosnie
+    sztucznie (wygladalo na 5 zebranych dni, a to byl jeden dzien
+    zduplikowany 5x)."""
+    with tempfile.TemporaryDirectory() as d:
+        csv_path = os.path.join(d, "arctic_snapshots.csv")
+        n1 = append_snapshot(csv_path, "Longyearbyen_Svalbard", _sample_records(),
+                              issue_date=date(2026, 8, 26), source="prognoza")
+        n2 = append_snapshot(csv_path, "Longyearbyen_Svalbard", _sample_records(),
+                              issue_date=date(2026, 8, 26), source="prognoza")
+        assert n1 == 2
+        assert n2 == 0, "drugie wywolanie z tym samym issue_date/source nie powinno nic dopisac"
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 2
+
+
+def test_append_different_issue_date_still_accumulates():
+    """Idempotencja jest po kluczu (station, target_date, issue_date,
+    source) - INNY issue_date (kolejny dzien) to legalnie nowy wiersz,
+    nie duplikat."""
+    with tempfile.TemporaryDirectory() as d:
+        csv_path = os.path.join(d, "arctic_snapshots.csv")
+        append_snapshot(csv_path, "Longyearbyen_Svalbard", _sample_records(),
+                         issue_date=date(2026, 8, 26), source="prognoza")
+        n2 = append_snapshot(csv_path, "Longyearbyen_Svalbard", _sample_records(),
+                              issue_date=date(2026, 8, 27), source="prognoza")
+        assert n2 == 2
+        with open(csv_path, newline="", encoding="utf-8") as f:
+            rows = list(csv.DictReader(f))
+        assert len(rows) == 4
