@@ -1,0 +1,89 @@
+"""
+fetch.py — pobieranie prognozy/archiwum z Open-Meteo dla stacji arktycznej.
+
+Używa endpointu DOBOWEGO (`daily=`), nie godzinowego (`hourly=`) jak
+Synoptyk-v2.0 dla Krakowa. To świadoma różnica, nie przeoczenie:
+
+- Krakow: pobiera godzinowe dane, sam agreguje do dobowych (`_daily_stats`
+  w gui_app.py) - dzięki temu ma prawdziwą średnią dobową (`temp_avg`)
+  liczoną z 24 punktów, i może zasilić filtr falkowy/TIMDR gęstszym
+  sygnałem.
+- Tu: Open-Meteo sam agreguje dobowo po swojej stronie. Prostsze, mniej
+  kodu, ale NIE MA prawdziwej średniej dobowej - tylko `temperature_2m_max`
+  i `temperature_2m_min`. `avg_temp_c` w tym module jest WYLICZANE jako
+  (max+min)/2 - to przybliżenie, nie ta sama wielkość co Krakowa `avg`
+  (systematycznie się różnią dla asymetrycznych przebiegów dobowych -
+  patrz README, sekcja "Różnice metodologiczne vs Synoptyk-v2.0").
+  Filtr falkowy/TIMDR na sygnale dobowym (7-10 punktów) też będzie miał
+  dużo mniej do analizy niż na godzinowym - to nie jest tu jeszcze
+  wpięte (patrz README, "Czego brakuje").
+"""
+from __future__ import annotations
+
+from typing import Any
+
+import requests
+
+from .station import ArcticStation
+
+_DAILY_FIELDS = (
+    "temperature_2m_max,temperature_2m_min,precipitation_sum,"
+    "wind_speed_10m_max,pressure_msl_mean"
+)
+
+FORECAST_BASE_URL = "https://api.open-meteo.com/v1/forecast"
+ARCHIVE_BASE_URL = "https://archive-api.open-meteo.com/v1/archive"
+
+
+def _parse_daily_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Zamienia surowy JSON Open-Meteo (klucz 'daily', kolumnowo) na listę
+    wierszy (po jednym słowniku na dzień) - łatwiejsze do logowania w CSV
+    i do testowania niż surowa struktura kolumnowa.
+
+    Rzuca KeyError, jeśli brakuje 'daily' albo 'time' - jawnie, zamiast
+    cicho zwracać pustą listę (żeby zmiana kształtu odpowiedzi API nie
+    przeszła niezauważona, patrz timdr-signal-framework §4 o cichych
+    awariach schematu)."""
+    daily = payload["daily"]
+    dates = daily["time"]
+
+    rows = []
+    for i, d in enumerate(dates):
+        t_max = daily["temperature_2m_max"][i]
+        t_min = daily["temperature_2m_min"][i]
+        avg = None
+        if t_max is not None and t_min is not None:
+            avg = round((t_max + t_min) / 2, 2)
+        rows.append({
+            "date": d,
+            "temp_min_c": t_min,
+            "temp_avg_c_approx": avg,  # patrz zastrzezenie w docstringu modulu
+            "temp_max_c": t_max,
+            "precip_mm": daily["precipitation_sum"][i],
+            "wind_kmh": daily["wind_speed_10m_max"][i],
+            "pressure_hpa": daily["pressure_msl_mean"][i],
+        })
+    return rows
+
+
+def fetch_forecast(station: ArcticStation, forecast_days: int = 7, timeout: float = 20.0) -> list[dict[str, Any]]:
+    """Pobiera prognozę dobową (do 16 dni, ograniczone tu do 7 domyślnie -
+    dokładnie tyle, ile zweryfikowano ręcznie 2026-08-26)."""
+    url = (
+        f"{FORECAST_BASE_URL}?latitude={station.lat}&longitude={station.lon}"
+        f"&daily={_DAILY_FIELDS}&forecast_days={forecast_days}&timezone=UTC"
+    )
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return _parse_daily_response(r.json())
+
+
+def fetch_archive(station: ArcticStation, past_days: int = 10, timeout: float = 20.0) -> list[dict[str, Any]]:
+    """Pobiera zarejestrowaną historię (past_days wstecz od dziś)."""
+    url = (
+        f"{ARCHIVE_BASE_URL}?latitude={station.lat}&longitude={station.lon}"
+        f"&daily={_DAILY_FIELDS}&past_days={past_days}&timezone=UTC"
+    )
+    r = requests.get(url, timeout=timeout)
+    r.raise_for_status()
+    return _parse_daily_response(r.json())
