@@ -86,22 +86,83 @@ arctic_synoptyk/
 run_arctic.py       — codzienny runner (uruchamiać NA LAPTOPIE, nie w sandboksie)
 fetch_arctic_test.py — samodzielny skrypt testowy (bez zależności), którym
                         użytkownik zweryfikował dostęp do API 2026-08-26
+demo_synthetic_fill.py — generuje SYNTETYCZNE dane demo (osobny CSV/stacja)
+webapp/
+    app.py              — FastAPI: /api/status, /api/real_bias, /api/demo_bias, /
+    static/index.html   — dashboard (JS + Chart.js z CDN, czyta API na żywo)
+run_dashboard.bat   — uruchamia dashboard www (Etap 3)
 arctic_forecast_snapshots.csv — zaseedowane pierwszym realnym pobraniem
-tests/            — 28 testów, w tym na PRAWDZIWYCH fixtures z API
+demo_synthetic_arctic_snapshots.csv — SYNTETYCZNE dane demo, osobno od realnych
+tests/            — 35 testów, w tym na PRAWDZIWYCH fixtures z API
 ```
 
 ## Instalacja i uruchomienie
 
 ```bash
 pip install -r requirements.txt
-pytest -v                  # 28 testów, wszystkie na realnych/kontrolowanych danych
+pytest -v                  # 35 testów, wszystkie na realnych/kontrolowanych danych
 python run_arctic.py        # codzienne pobranie + log (URUCHAMIAĆ NA LAPTOPIE)
 ```
 
 ## Status testów
 
-28/28 testów przechodzi — w tym 4 bezpośrednio na prawdziwych odpowiedziach
+35/35 testów przechodzi — w tym 4 bezpośrednio na prawdziwych odpowiedziach
 API z 2026-08-26 (`test_fetch.py`), nie na wymyślonych strukturach.
+
+## Etap 3 — dashboard www (lokalna appka)
+
+Świadomy wybór po rozmowie o "ładnym www": NIE statyczny plik `.html` z
+wbudowanymi danymi (trzeba by go ręcznie regenerować po każdym
+`run_arctic.py`) — tylko prawdziwa, malutka appka **FastAPI**, która przy
+**każdym** żądaniu na nowo czyta aktualny stan CSV z dysku. Żadnego kroku
+"przebuduj stronę" — wystarczy odświeżyć przeglądarkę.
+
+### Uruchomienie
+
+```bash
+run_dashboard.bat
+```
+
+albo ręcznie:
+
+```bash
+pip install -r requirements.txt
+python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8000
+# otwórz http://127.0.0.1:8000
+```
+
+### Co pokazuje
+
+- **Status stacji** — liczba wierszy/dni zebranych w `arctic_forecast_snapshots.csv`,
+  data ostatniego pobrania, poziom nieaktualności (`classify_staleness()`
+  z `offline.py`, policzony na PRAWDZIWEJ dacie ostatniego wiersza — nie
+  atrapa).
+- **Trafność prognozy — dane REALNE** — `compute_lead_bias()` na
+  `arctic_forecast_snapshots.csv`. Przy jednym dniu zebranych danych to
+  celowo puste (`official: {}`) — panel jawnie to komunikuje ("za mało
+  danych"), plus tabela surowych liczników `n` per `lead_days`, żeby było
+  widać postęp w kierunku progu `min_samples=5`, bez udawania, że to już
+  wynik.
+- **Demo — dane SYNTETYCZNE** — ten sam mechanizm na
+  `demo_synthetic_arctic_snapshots.csv` (`demo_synthetic_fill.py`),
+  wizualnie odseparowany pomarańczowym banerem ostrzegawczym z jawnym
+  disclaimerem w każdej odpowiedzi API (`/api/demo_bias`), żeby nie dało
+  się pomylić z prawdziwym wynikiem.
+
+### Endpointy (JSON, do wglądu/debugowania niezależnie od strony)
+
+| endpoint | zwraca |
+|---|---|
+| `GET /api/status` | metadane stacji + liczba dni + poziom świeżości |
+| `GET /api/real_bias` | oficjalny bias/MAE (>=5 par) + surowe liczniki n |
+| `GET /api/demo_bias` | bias/MAE na danych syntetycznych + disclaimer |
+
+### Testy
+
+`tests/test_webapp.py` (7 testów) — na **izolowanych, tymczasowych CSV**
+(monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`), nigdy na prawdziwym pliku
+repo — appka tylko czyta CSV, nigdy nie zapisuje, więc to bezpieczne przy
+normalnym użyciu, ale testy i tak nie ryzykują dotknięcia realnych danych.
 
 ## Etap 2 — architektura odporna na przerwy w łączności
 
