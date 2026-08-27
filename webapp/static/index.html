@@ -91,6 +91,12 @@
 </div>
 
 <div class="panel" style="margin-bottom:20px;">
+  <h2>Surowe odczyty — czy kolektor w ogóle działa?</h2>
+  <div class="empty-note">Każdy wiersz to jeden zapis do CSV (prognoza albo pobranie z archiwum) - widoczny od razu, niezależnie od tego, czy uzbierało się już >= min_samples par do tabeli trafności poniżej. Jeśli tu coś jest, pipeline żyje.</div>
+  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="panel" style="margin-bottom:20px;">
   <h2>Trafność prognozy — dane REALNE (bias/MAE per lead_days)</h2>
   <div id="real-bias-note" class="empty-note"></div>
   <canvas id="real-chart"></canvas>
@@ -130,6 +136,21 @@ function renderStatus(s) {
     <div class="stat"><span class="k">Świeżość</span><span class="v">${staleBadge}</span></div>
     <div class="stat"><span class="k">Próg min_samples</span><span class="v">${s.min_samples_required}</span></div>
   `;
+}
+
+function renderLatestReadings(data) {
+  const tbody = document.querySelector("#readings-table tbody");
+  tbody.innerHTML = "";
+  if (!data.rows || data.rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
+    return;
+  }
+  data.rows.forEach(row => {
+    const tr = document.createElement("tr");
+    const srcLabel = row.source === "prognoza" ? "📡 prognoza" : "📚 archiwum";
+    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${row.pressure_hpa ?? "—"}</td>`;
+    tbody.appendChild(tr);
+  });
 }
 
 function renderRealBias(data) {
@@ -185,14 +206,16 @@ function renderDemoBias(data) {
 }
 
 async function loadAll() {
-  const [s, rb, db] = await Promise.all([
+  const [s, rb, db, lr] = await Promise.all([
     getJSON("/api/status"),
     getJSON("/api/real_bias"),
     getJSON("/api/demo_bias"),
+    getJSON("/api/latest_readings"),
   ]);
   renderStatus(s);
   renderRealBias(rb);
   renderDemoBias(db);
+  renderLatestReadings(lr);
 }
 
 loadAll();

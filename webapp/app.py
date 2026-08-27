@@ -23,6 +23,14 @@ Endpointy:
 - GET  /api/demo_bias  — to samo, ale na demo_synthetic_arctic_snapshots.csv
                          (SYNTETYCZNE dane) - zawsze jawnie opisane jako
                          demo, nigdy nie miesza się z /api/real_bias
+- GET  /api/latest_readings — SUROWE, NIESPAROWANE wiersze z REAL_CSV (i
+                         "prognoza", i "archiwum_openmeteo"), posortowane
+                         od najnowszych. Cel: dać widoczność, że kolektor w
+                         ogóle działa i zapisuje realne liczby, zanim
+                         uzbiera się >= min_samples par potrzebnych do
+                         /api/real_bias - bez tego endpointu jedyny sposób
+                         sprawdzenia "czy coś się zbiera" to zajrzenie do
+                         CSV ręcznie na dysku.
 
 Ścieżki do plików CSV są modułowymi stałymi (REAL_CSV/DEMO_CSV) właśnie po
 to, żeby testy mogły je podmienić (monkeypatch) na izolowane pliki
@@ -120,6 +128,25 @@ def demo_bias() -> dict:
             "NIE pomiar rzeczywistej trafności stacji arktycznej."
         ),
     }
+
+
+@app.get("/api/latest_readings")
+def latest_readings(limit: int = 20) -> dict:
+    """Surowe wiersze z REAL_CSV (obu źródeł - "prognoza" i
+    "archiwum_openmeteo"), posortowane malejąco po (issue_date, target_date).
+
+    Celowo NIE wymaga sparowania prognoza<->rzeczywistość ani min_samples -
+    to jest widok "czy pipeline żyje", nie widok trafności. Jeśli tu coś
+    się pokazuje, kolektor faktycznie pisze dane; brak wpisów dla
+    lead_days=0 w /api/real_bias to wtedy potwierdzone kwestia progu/
+    opóźnienia archiwum, a nie tego, że nic się nie zbiera."""
+    rows = _read_rows(REAL_CSV, STATION)
+    rows_sorted = sorted(
+        rows,
+        key=lambda r: (r.get("issue_date", ""), r.get("target_date", "")),
+        reverse=True,
+    )
+    return {"rows": rows_sorted[:limit], "n_total": len(rows)}
 
 
 @app.get("/", response_class=HTMLResponse)

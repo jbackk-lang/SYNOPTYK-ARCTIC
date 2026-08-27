@@ -108,7 +108,7 @@ run_arctic.py           — codzienny runner (uruchamiać lokalnie, nie w sandbo
 fetch_arctic_test.py    — samodzielny skrypt testowy (bez zależności)
 demo_synthetic_fill.py  — generuje syntetyczne dane demo (osobny CSV/stacja)
 webapp/
-    app.py              — FastAPI: /api/status, /api/real_bias, /api/demo_bias, /
+    app.py              — FastAPI: /api/status, /api/real_bias, /api/demo_bias, /api/latest_readings, /
     static/index.html   — dashboard (JS + Chart.js z CDN, czyta API na żywo)
 run_dashboard.bat       — uruchamia dashboard www
 arctic_forecast_snapshots.csv         — realne dane z bieżących uruchomień
@@ -164,6 +164,13 @@ python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8000
   `demo_synthetic_arctic_snapshots.csv` (`demo_synthetic_fill.py`),
   wizualnie odseparowany banerem ostrzegawczym i disclaimerem w każdej
   odpowiedzi `/api/demo_bias`.
+- **Surowe odczyty** — osobna tabela nad tabelą trafności, pokazująca
+  ostatnie surowe wiersze z `arctic_forecast_snapshots.csv` (i "prognoza",
+  i "archiwum_openmeteo") bez żadnego progu/parowania. Dodane po pytaniu
+  użytkownika, czy da się w ogóle zobaczyć, że kolektor działa, zanim
+  uzbiera się `min_samples=5` par do tabeli trafności — bo `/api/real_bias`
+  celowo pokazuje pustą tabelę na starcie (patrz wyżej), co bez tego widoku
+  wygląda identycznie jak "nic się nie zbiera", nawet gdy zbiera.
 
 ### Endpointy
 
@@ -172,10 +179,11 @@ python -m uvicorn webapp.app:app --host 127.0.0.1 --port 8000
 | `GET /api/status` | metadane stacji + liczba dni + poziom świeżości |
 | `GET /api/real_bias` | oficjalny bias/MAE (>=5 par) + surowe liczniki n |
 | `GET /api/demo_bias` | bias/MAE na danych syntetycznych + disclaimer |
+| `GET /api/latest_readings` | ostatnie N surowych, niesparowanych wierszy z REAL_CSV — widoczność że kolektor pisze dane, niezależnie od progu `min_samples` |
 
 ### Testy
 
-`tests/test_webapp.py` (7 testów) — na izolowanych, tymczasowych CSV
+`tests/test_webapp.py` (10 testów) — na izolowanych, tymczasowych CSV
 (monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`), nie na plikach repo.
 
 ## Etap 2 — architektura odporna na przerwy w łączności

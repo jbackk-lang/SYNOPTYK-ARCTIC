@@ -148,6 +148,67 @@ def test_demo_bias_always_carries_disclaimer_when_present():
             app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
 
 
+def test_latest_readings_empty_when_no_data():
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            body = client.get("/api/latest_readings").json()
+            assert body["rows"] == []
+            assert body["n_total"] == 0
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_latest_readings_shows_rows_even_when_unpaired():
+    """To jest dokladnie przypadek, ktory /api/real_bias celowo ukrywa
+    (n < min_samples albo brak pokrycia target_date przez archiwum) - tu
+    surowy wiersz ma byc widoczny mimo to, zeby dalo sie sprawdzic ze
+    kolektor cos zapisuje."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-27", 3.8)],
+                         issue_date=date(2026, 8, 27), source="prognoza")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            body = client.get("/api/latest_readings").json()
+            assert body["n_total"] == 1
+            assert len(body["rows"]) == 1
+            row = body["rows"][0]
+            assert row["source"] == "prognoza"
+            assert row["target_date"] == "2026-08-27"
+            assert float(row["temp_max_c"]) == 3.8
+            # a real_bias na tych samych danych jest pusty - potwierdza ze to
+            # dwa rozne widoki tego samego CSV, nie duplikat tej samej logiki
+            rb = client.get("/api/real_bias").json()
+            assert rb["official"] == {}
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_latest_readings_sorted_newest_first_and_respects_limit():
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        for day in range(20, 28):
+            append_snapshot(real_csv, STATION, [_forecast_row(f"2026-08-{day:02d}", 5.0)],
+                             issue_date=date(2026, 8, day), source="prognoza")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            body = client.get("/api/latest_readings?limit=3").json()
+            assert body["n_total"] == 8
+            assert len(body["rows"]) == 3
+            assert body["rows"][0]["issue_date"] == "2026-08-27"
+            assert body["rows"][-1]["issue_date"] == "2026-08-25"
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
 def test_index_page_serves_html():
     client = TestClient(app_module.app)
     r = client.get("/")
