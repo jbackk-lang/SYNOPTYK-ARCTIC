@@ -44,6 +44,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
 from arctic_synoptyk.bias import compute_lead_bias
 from arctic_synoptyk.offline import classify_staleness
@@ -57,6 +58,15 @@ DEMO_STATION = "Longyearbyen_Svalbard_DEMO"
 MIN_SAMPLES = 5
 
 app = FastAPI(title="SYNOPTYK-ARCTIC Dashboard")
+
+# Serwuje webapp/static/vendor/chart.umd.js pod /static/vendor/... . Wczesniej
+# index.html ladowal Chart.js z cdnjs.cloudflare.com - na sieci firmowej z
+# ograniczonym dostepem do internetu ten request cicho zawodzil, `Chart`
+# nigdy nie powstawal, a przycisk "Odswiez teraz" wygladal jakby nic nie
+# robil (loadAll() wywalal sie w polowie na `new Chart(...)`, zanim zdazyl
+# zaktualizowac pozostale panele). Teraz caly dashboard dziala bez internetu.
+STATIC_DIR = Path(__file__).parent / "static"
+app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
 
 def _read_rows(csv_path: Path, station: str) -> list[dict]:
@@ -151,5 +161,5 @@ def latest_readings(limit: int = 20) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 def index() -> str:
-    html_path = Path(__file__).parent / "static" / "index.html"
+    html_path = STATIC_DIR / "index.html"
     return html_path.read_text(encoding="utf-8")

@@ -94,6 +94,39 @@ puste), co jest teraz **poprawnym**, uczciwym stanem, a nie regresem:
 pierwsze prawdziwe pary (prognoza vs. archiwum sprzed ≥2 dni dla tej
 samej daty) pojawią się po kolejnych ~2 dniach regularnego uruchamiania.
 
+### Poprawka: przycisk "Odśwież teraz" nic nie robił (2026-08-29)
+
+Zgłoszenie: dane się zbierają poprawnie (`run.bat`/`run_arctic.py`
+dopisuje do CSV bez problemu), ale przycisk odświeżania w dashboardzie
+(`webapp/static/index.html`) nie działał.
+
+Przyczyna: `index.html` ładował Chart.js z zewnętrznego CDN
+(`cdnjs.cloudflare.com`). Na sieci z ograniczonym dostępem do internetu
+ten request cicho zawodził, więc `Chart` nigdy nie powstawał. `loadAll()`
+odpytywał wszystkie cztery endpointy naraz, ale renderował je *sekwencyjnie
+i bez izolacji błędów* — gdy `renderRealBias()` docierał do `new
+Chart(...)` i się wywalał, cała reszta funkcji (w tym `renderDemoBias()` i
+`renderLatestReadings()`) nigdy się nie wykonywała, a błąd lądował tylko w
+konsoli przeglądarki, niewidoczny dla użytkownika. Efekt: kliknięcie
+przycisku wyglądało, jakby nic nie robiło.
+
+Naprawione (ten sam wzorzec co w `fusion-tools` w tej samej sesji, ten sam
+prawdziwy problem sieciowy):
+
+1. **Chart.js zwendorowany lokalnie** w `webapp/static/vendor/chart.umd.js`
+   (v4.4.4, MIT) zamiast ładowany z CDN — dashboard działa teraz w pełni
+   offline, zgodnie z tym, co README i tak zakładało.
+2. **`loadAll()` przepisany na niezależne sekcje** (`loadSection()`) —
+   błąd w jednej sekcji (np. brak Chart.js, błąd sieci, błąd API) nie
+   blokuje już renderowania pozostałych trzech, i jest pokazany w
+   widocznym żółtym banerze na górze strony zamiast ginąć w konsoli.
+3. `app.py`: dodano `app.mount("/static", StaticFiles(...))`, żeby
+   zwendorowany plik JS w ogóle dało się serwować.
+
+Testy: `test_index_page_does_not_reference_external_cdn`,
+`test_vendored_chartjs_is_served` w `tests/test_webapp.py`. 50/50 testów
+przechodzi.
+
 ## Struktura repo
 
 ```

@@ -215,3 +215,28 @@ def test_index_page_serves_html():
     assert r.status_code == 200
     assert "SYNOPTYK-ARCTIC" in r.text
     assert "text/html" in r.headers["content-type"]
+
+
+def test_index_page_does_not_reference_external_cdn():
+    """
+    Regression test: index.html used to load Chart.js from
+    cdnjs.cloudflare.com. On a locked-down corporate network that request
+    silently failed, `Chart` was never defined, and the "Odswiez teraz"
+    button appeared to do nothing (loadAll() died partway through on
+    `new Chart(...)`, before rendering the rest of the panels). Chart.js is
+    now vendored locally under webapp/static/vendor/ - the page must not
+    reference any external script host.
+    """
+    client = TestClient(app_module.app)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert 'src="http' not in r.text
+    assert '<script src="/static/vendor/chart.umd.js"></script>' in r.text
+
+
+def test_vendored_chartjs_is_served():
+    client = TestClient(app_module.app)
+    r = client.get("/static/vendor/chart.umd.js")
+    assert r.status_code == 200
+    assert b"Chart.js" in r.content
+    assert len(r.content) > 100_000

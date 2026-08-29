@@ -4,7 +4,11 @@
 <meta charset="UTF-8">
 <title>SYNOPTYK-ARCTIC — Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<!-- Chart.js zaladowany lokalnie z /static/vendor/, NIE z zewnetrznego CDN -
+     na sieci firmowej z ograniczonym dostepem do internetu ladowanie z
+     CDN cicho zawodzilo, `Chart` nigdy nie powstawal i przycisk "Odswiez
+     teraz" wygladal jakby nic nie robil. -->
+<script src="/static/vendor/chart.umd.js"></script>
 <style>
   :root {
     --bg: #0b0f14;
@@ -77,6 +81,7 @@
 
 <h1>🧊 SYNOPTYK-ARCTIC — Dashboard</h1>
 <div class="sub">Longyearbyen, Svalbard &mdash; dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).</div>
+<div id="global-error" class="warn-banner" style="display:none;"></div>
 
 <div class="grid">
   <div class="panel" id="status-panel">
@@ -205,17 +210,46 @@ function renderDemoBias(data) {
   });
 }
 
+const _sectionErrors = {};
+
+function _showGlobalError() {
+  const el = document.getElementById("global-error");
+  const msgs = Object.entries(_sectionErrors).map(([label, msg]) => `${label}: ${msg}`);
+  if (msgs.length === 0) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  el.textContent = "⚠️ " + msgs.join(" · ");
+}
+
+// Kazda sekcja (status / trafnosc real / demo / surowe odczyty) jest
+// odpytywana i renderowana NIEZALEZNIE. Wczesniej jeden nieobsluzony blad
+// (np. "Chart is not defined", gdy CDN nie odpowiadal) przerywal cala
+// funkcje loadAll() w polowie - reszta panelu nigdy sie nie aktualizowala,
+// a przycisk "Odswiez teraz" wygladal jakby zupelnie nic nie robil, bez
+// zadnego widocznego komunikatu (blad ladowal sie tylko do konsoli
+// przegladarki). Teraz blad w jednej sekcji nie blokuje pozostalych, i jest
+// pokazany w widocznym banerze zamiast ginac w konsoli.
+async function loadSection(url, renderFn, label) {
+  try {
+    const data = await getJSON(url);
+    renderFn(data);
+    delete _sectionErrors[label];
+  } catch (e) {
+    console.error(`[SYNOPTYK-ARCTIC] Blad w sekcji "${label}":`, e);
+    _sectionErrors[label] = e.message || String(e);
+  }
+  _showGlobalError();
+}
+
 async function loadAll() {
-  const [s, rb, db, lr] = await Promise.all([
-    getJSON("/api/status"),
-    getJSON("/api/real_bias"),
-    getJSON("/api/demo_bias"),
-    getJSON("/api/latest_readings"),
+  await Promise.all([
+    loadSection("/api/status", renderStatus, "Status stacji"),
+    loadSection("/api/real_bias", renderRealBias, "Trafność (realne)"),
+    loadSection("/api/demo_bias", renderDemoBias, "Demo"),
+    loadSection("/api/latest_readings", renderLatestReadings, "Surowe odczyty"),
   ]);
-  renderStatus(s);
-  renderRealBias(rb);
-  renderDemoBias(db);
-  renderLatestReadings(lr);
 }
 
 loadAll();
