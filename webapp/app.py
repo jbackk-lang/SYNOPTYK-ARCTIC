@@ -31,6 +31,11 @@ Endpointy:
                          /api/real_bias - bez tego endpointu jedyny sposób
                          sprawdzenia "czy coś się zbiera" to zajrzenie do
                          CSV ręcznie na dysku.
+- POST /api/collect    — URUCHAMIA faktyczne pobranie nowych danych z
+                         Open-Meteo i dopisanie do CSV (to samo, co
+                         `python run_arctic.py`/`run.bat`, ta sama funkcja
+                         `collect()`) - patrz uwaga niżej, DLACZEGO to
+                         osobny przycisk od "Odśwież teraz".
 
 Ścieżki do plików CSV są modułowymi stałymi (REAL_CSV/DEMO_CSV) właśnie po
 to, żeby testy mogły je podmienić (monkeypatch) na izolowane pliki
@@ -49,6 +54,7 @@ from fastapi.staticfiles import StaticFiles
 from arctic_synoptyk.bias import compute_lead_bias
 from arctic_synoptyk.offline import classify_staleness
 from arctic_synoptyk.station import LONGYEARBYEN
+from run_arctic import collect as _collect_arctic_data
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REAL_CSV = BASE_DIR / "arctic_forecast_snapshots.csv"
@@ -157,6 +163,25 @@ def latest_readings(limit: int = 20) -> dict:
         reverse=True,
     )
     return {"rows": rows_sorted[:limit], "n_total": len(rows)}
+
+
+@app.post("/api/collect")
+def collect() -> dict:
+    """Uruchamia faktyczne pobranie nowych danych (Open-Meteo) i dopisanie
+    do REAL_CSV - dokladnie ta sama logika co `python run_arctic.py`
+    (wspolna funkcja `collect()` w run_arctic.py), wywolana tutaj z
+    ABSOLUTNA sciezka REAL_CSV (nie relatywna domyslna z run_arctic.py),
+    zeby wynik NIE zalezal od katalogu roboczego procesu uvicorn.
+
+    Powod istnienia tego przycisku: "Odswiez teraz" w dashboardzie tylko
+    PONOWNIE CZYTA aktualny stan CSV z dysku - jesli nikt wczesniej nie
+    uruchomil `run_arctic.py`/`run.bat`, na dysku faktycznie nie ma nic
+    nowego do przeczytania, wiec przycisk "Odswiez" wyglada, jakby "nie
+    ladowal danych", mimo ze dziala poprawnie (uczciwie zdiagnozowane po
+    zgloszeniu tego jako bledu - to byla mylaca nazwa/workflow, nie blad
+    w kodzie odswiezania). Ten endpoint pozwala zrobic OBIE rzeczy jednym
+    kliknieciem w przegladarce, bez przelaczania sie do terminala/`run.bat`."""
+    return _collect_arctic_data(csv_path=str(REAL_CSV), station=LONGYEARBYEN)
 
 
 @app.get("/", response_class=HTMLResponse)

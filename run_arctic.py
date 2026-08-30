@@ -24,40 +24,76 @@ CSV_PATH = "arctic_forecast_snapshots.csv"
 STATION = LONGYEARBYEN
 
 
-def main():
-    today = date.today()
-    station_name = STATION.name
+def collect(csv_path: str = CSV_PATH, station=STATION) -> dict:
+    """Pobiera prognoze + archiwum i dopisuje do CSV - JEDNO miejsce z ta
+    logika, uzywane zarowno przez `main()` (CLI/`run.bat`) jak i przez
+    `webapp.app`'s `POST /api/collect` (przycisk "Pobierz nowe dane teraz"
+    w dashboardzie) - zeby obie sciezki uzycia robily DOKLADNIE to samo,
+    bez duplikowania logiki, ktora moglaby sie rozjechac.
 
+    Zwraca dict (nie printuje) - wywolujacy (CLI albo API) decyduje, jak
+    to pokazac."""
+    today = date.today()
+    station_name = station.name
+
+    forecast_error = None
     try:
-        forecast_rows = fetch_forecast(STATION, forecast_days=7)
+        forecast_rows = fetch_forecast(station, forecast_days=7)
     except Exception as e:
-        print(f"BLAD pobierania prognozy: {e}")
+        forecast_error = str(e)
         forecast_rows = []
 
+    archive_error = None
     try:
-        archive_rows = fetch_archive(STATION, past_days=10)
+        archive_rows = fetch_archive(station, past_days=10)
     except Exception as e:
-        print(f"BLAD pobierania archiwum: {e}")
+        archive_error = str(e)
         archive_rows = []
 
-    n_fc = append_snapshot(CSV_PATH, station_name, forecast_rows, issue_date=today, source="prognoza")
-    n_arch = append_snapshot(CSV_PATH, station_name, archive_rows, issue_date=today, source="archiwum_openmeteo")
-    print(f"[{today}] {station_name}: dopisano {n_fc} wierszy prognozy + {n_arch} wierszy archiwum")
+    n_fc = append_snapshot(csv_path, station_name, forecast_rows, issue_date=today, source="prognoza")
+    n_arch = append_snapshot(csv_path, station_name, archive_rows, issue_date=today, source="archiwum_openmeteo")
 
-    bias = compute_lead_bias(CSV_PATH, station_name)
+    bias = compute_lead_bias(csv_path, station_name)
+    raw = compute_lead_bias(csv_path, station_name, min_samples=1) if not bias else None
+
+    return {
+        "date": today.isoformat(),
+        "station": station_name,
+        "n_forecast_added": n_fc,
+        "n_archive_added": n_arch,
+        "forecast_error": forecast_error,
+        "archive_error": archive_error,
+        "bias": bias,
+        "raw_counts": {lead: v["n"] for lead, v in raw.items()} if raw else None,
+    }
+
+
+def main():
+    result = collect()
+    today, station_name = result["date"], result["station"]
+
+    if result["forecast_error"]:
+        print(f"BLAD pobierania prognozy: {result['forecast_error']}")
+    if result["archive_error"]:
+        print(f"BLAD pobierania archiwum: {result['archive_error']}")
+
+    print(f"[{today}] {station_name}: dopisano {result['n_forecast_added']} wierszy prognozy "
+          f"+ {result['n_archive_added']} wierszy archiwum")
+
+    bias = result["bias"]
     if bias:
         print("Aktualna korekta obciazenia (lead_days -> bias/MAE/n):")
         for lead in sorted(bias):
             e = bias[lead]
             print(f"  lead_days={lead}: bias={e['bias']:+.2f} MAE={e['mae']:.2f} n={e['n']}")
     else:
-        raw = compute_lead_bias(CSV_PATH, station_name, min_samples=1)
         print("Korekta jeszcze niedostepna - za malo sparowanych dni w CSV "
               "(potrzeba min. 5 par na dany lead_days, patrz README).")
+        raw = result["raw_counts"]
         if raw:
             print("Dotychczasowy postep (surowe liczniki n, NIE wynik trafnosci):")
             for lead in sorted(raw):
-                print(f"  lead_days={lead}: n={raw[lead]['n']} / 5")
+                print(f"  lead_days={lead}: n={raw[lead]} / 5")
         else:
             print("Jeszcze zero sparowanych dni (prognoza vs. pozniejsze archiwum "
                   "dla tej samej daty) - normalne w pierwszych ~2 dniach zbierania, "

@@ -240,3 +240,83 @@ def test_vendored_chartjs_is_served():
     assert r.status_code == 200
     assert b"Chart.js" in r.content
     assert len(r.content) > 100_000
+
+
+def test_collect_endpoint_calls_shared_collect_with_absolute_real_csv():
+    """POST /api/collect musi wywolywac run_arctic.collect() (ta sama funkcja
+    co CLI/run.bat) z ABSOLUTNA sciezka REAL_CSV i stacja LONGYEARBYEN, i
+    zwracac jej wynik bez zmian - patrz docstring endpointu w webapp/app.py
+    (dlaczego to osobny przycisk od "Odswiez teraz"). Monkeypatch na
+    app_module._collect_arctic_data, zeby test NIE robil zywego zapytania do
+    Open-Meteo."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        old_collect = app_module._collect_arctic_data
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+
+        captured = {}
+
+        def fake_collect(csv_path, station):
+            captured["csv_path"] = csv_path
+            captured["station"] = station
+            return {
+                "date": "2026-08-30",
+                "station": station.name,
+                "n_forecast_added": 3,
+                "n_archive_added": 2,
+                "forecast_error": None,
+                "archive_error": None,
+                "bias": {},
+                "raw_counts": None,
+            }
+
+        app_module._collect_arctic_data = fake_collect
+        try:
+            client = TestClient(app_module.app)
+            r = client.post("/api/collect")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["n_forecast_added"] == 3
+            assert body["n_archive_added"] == 2
+            assert captured["csv_path"] == str(Path(real_csv))
+            assert captured["station"].name == STATION
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+            app_module._collect_arctic_data = old_collect
+
+
+def test_collect_endpoint_passes_through_fetch_errors():
+    """Jesli fetch_forecast/fetch_archive zawiodly (np. brak sieci), collect()
+    zwraca to w forecast_error/archive_error zamiast rzucac wyjatek (patrz
+    run_arctic.collect) - endpoint musi to przekazac 1:1, nie polykac ani nie
+    zamieniac w 500."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        old_collect = app_module._collect_arctic_data
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+
+        def fake_collect(csv_path, station):
+            return {
+                "date": "2026-08-30",
+                "station": station.name,
+                "n_forecast_added": 0,
+                "n_archive_added": 0,
+                "forecast_error": "Connection timeout",
+                "archive_error": None,
+                "bias": {},
+                "raw_counts": None,
+            }
+
+        app_module._collect_arctic_data = fake_collect
+        try:
+            client = TestClient(app_module.app)
+            r = client.post("/api/collect")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["forecast_error"] == "Connection timeout"
+            assert body["n_forecast_added"] == 0
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+            app_module._collect_arctic_data = old_collect

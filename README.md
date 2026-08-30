@@ -127,6 +127,41 @@ Testy: `test_index_page_does_not_reference_external_cdn`,
 `test_vendored_chartjs_is_served` w `tests/test_webapp.py`. 50/50 testów
 przechodzi.
 
+### Dodano przycisk "▶ Pobierz nowe dane teraz" (2026-08-30)
+
+Po poprawce wyżej zgłoszenie "przycisk dalej nie ładuje danych" wróciło.
+Zdiagnozowano: to nie był ten sam błąd, tylko mylący workflow —
+"↻ Odśwież teraz" TYLKO na nowo czyta CSV z dysku (zweryfikowano wprost:
+dopisanie testowego wiersza do CSV bez restartu serwera natychmiast
+pojawiało się w `/api/status` — backend działał poprawnie). Jeśli nikt
+wcześniej nie uruchomił `run.bat`/`run_arctic.py` tego dnia, na dysku
+faktycznie nie ma nic nowego do przeczytania, więc przycisk wyglądał,
+jakby "nic nie robił".
+
+Naprawione przez dodanie DRUGIEGO przycisku, "▶ Pobierz nowe dane teraz",
+który faktycznie łączy się z Open-Meteo i dopisuje dane (nowy endpoint
+`POST /api/collect`, ta sama funkcja `collect()` co `run_arctic.py`/
+`run.bat` — wydzielona do wspólnego miejsca, żeby CLI i przycisk w
+przeglądarce robiły identyczną rzecz), a potem sam odświeża widok. Błędy
+sieciowe są przechwytywane i pokazane w dashboardzie (`forecast_error`/
+`archive_error`), nie ukryte — zweryfikowano wprost: w środowisku bez
+dostępu do `api.open-meteo.com` endpoint poprawnie zwraca czytelny błąd
+zamiast się wywalać, i NIE dotyka CSV (zero zmian na dysku przy błędzie
+sieci).
+
+**Uwaga przy tej okazji**: `run_arctic.py`'s domyślny `CSV_PATH` jest
+ŚCIEŻKĄ WZGLĘDNĄ (`"arctic_forecast_snapshots.csv"`) — zależną od
+katalogu roboczego procesu. `webapp/app.py` wywołuje teraz `collect()`
+z jawną ŚCIEŻKĄ BEZWZGLĘDNĄ (`REAL_CSV`, zakotwiczoną względem
+położenia samego pliku `app.py`), żeby wynik nie zależał od tego, skąd
+faktycznie wystartował `uvicorn` — potencjalne źródło rozjazdu między
+tym, co widzi dashboard, a tym, co zapisał kolektor, gdyby oba czytały
+inną kopię pliku.
+
+Pliki: `run_arctic.py` (`collect()` wydzielone z `main()`),
+`webapp/app.py` (`POST /api/collect`), `webapp/static/index.html`
+(drugi przycisk + `collectNow()`). 50/50 testów nadal przechodzi.
+
 ## Struktura repo
 
 ```

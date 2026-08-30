@@ -63,7 +63,7 @@
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: normal; }
   canvas { max-height: 260px; }
-  #refresh-btn {
+  #refresh-btn, #collect-btn {
     background: var(--accent-dim);
     color: var(--text);
     border: 1px solid var(--accent);
@@ -73,7 +73,8 @@
     cursor: pointer;
     font-size: 12px;
   }
-  #refresh-btn:hover { background: var(--accent); color: #08110f; }
+  #refresh-btn:hover, #collect-btn:hover { background: var(--accent); color: #08110f; }
+  #refresh-btn:disabled, #collect-btn:disabled { opacity: 0.5; cursor: default; background: var(--accent-dim); color: var(--text); }
   footer { color: var(--muted); font-size: 11px; margin-top: 24px; border-top: 1px solid var(--panel-border); padding-top: 12px; }
 </style>
 </head>
@@ -89,9 +90,20 @@
     <div id="status-body">ładowanie…</div>
   </div>
   <div class="panel">
-    <h2>Odśwież</h2>
-    <div class="empty-note">Dane pochodzą z <code>arctic_forecast_snapshots.csv</code>. Uruchom <code>run_arctic.py</code> na laptopie, żeby dopisać kolejny dzień, potem kliknij odśwież.</div>
-    <button id="refresh-btn" onclick="loadAll()">↻ Odśwież teraz</button>
+    <h2>Odśwież / Pobierz</h2>
+    <div class="empty-note">
+      <strong>▶ Pobierz nowe dane teraz</strong> łączy się z Open-Meteo i dopisuje
+      dzisiejszy dzień do <code>arctic_forecast_snapshots.csv</code> (to samo, co
+      <code>run.bat</code>/<code>python run_arctic.py</code>), a potem od razu
+      odświeża widok. <strong>↻ Odśwież teraz</strong> tylko na nowo czyta CSV
+      z dysku, bez pobierania niczego nowego — użyteczne, jeśli dane
+      dopisał ktoś inny (np. zaplanowane zadanie).
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+      <button id="collect-btn" onclick="collectNow()">▶ Pobierz nowe dane teraz</button>
+      <button id="refresh-btn" onclick="loadAll()">↻ Odśwież teraz</button>
+    </div>
+    <div id="collect-status" class="empty-note" style="margin-top:8px;"></div>
   </div>
 </div>
 
@@ -250,6 +262,38 @@ async function loadAll() {
     loadSection("/api/demo_bias", renderDemoBias, "Demo"),
     loadSection("/api/latest_readings", renderLatestReadings, "Surowe odczyty"),
   ]);
+}
+
+// "Pobierz nowe dane teraz" - w odroznieniu od loadAll()/"Odswiez teraz"
+// (ktore TYLKO na nowo czytaja CSV z dysku), to faktycznie laczy sie z
+// Open-Meteo i DOPISUJE nowy wiersz - ta sama funkcja collect() co
+// run_arctic.py/run.bat, wywolana przez POST /api/collect. Po zakonczeniu
+// (sukces albo blad sieci - obsluzone, nie ukryte) odswieza caly widok,
+// zeby nowe dane (jesli sa) byly widoczne od razu, bez osobnego klikania
+// "Odswiez".
+async function collectNow() {
+  const btn = document.getElementById("collect-btn");
+  const status = document.getElementById("collect-status");
+  btn.disabled = true;
+  status.textContent = "⏳ Łączenie z Open-Meteo, pobieranie prognozy i archiwum...";
+  try {
+    const r = await fetch("/api/collect", { method: "POST", cache: "no-store" });
+    const data = await r.json();
+    const parts = [];
+    parts.push(`✅ dopisano ${data.n_forecast_added} wierszy prognozy + ${data.n_archive_added} wierszy archiwum`);
+    if (data.forecast_error) parts.push(`⚠️ błąd prognozy: ${data.forecast_error}`);
+    if (data.archive_error) parts.push(`⚠️ błąd archiwum: ${data.archive_error}`);
+    if (data.n_forecast_added === 0 && data.n_archive_added === 0 && !data.forecast_error && !data.archive_error) {
+      parts.push("(0 nowych wierszy zwykle znaczy: już pobrano dane na dziś — to nie błąd, patrz README o idempotentności)");
+    }
+    status.textContent = parts.join(" · ");
+    await loadAll();
+  } catch (e) {
+    console.error("[SYNOPTYK-ARCTIC] Blad /api/collect:", e);
+    status.textContent = "⚠️ Nie udało się połączyć z serwerem: " + (e.message || e);
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 loadAll();
