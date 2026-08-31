@@ -57,6 +57,40 @@ def test_no_missing_values_in_august_fixtures():
                 assert r[key] is not None, f"{fixture}: brak {key} dla {r['date']}"
 
 
+def test_parse_real_fixtures_have_no_wind_direction_predates_field():
+    """arctic_forecast_result.json/arctic_archive_result.json zostaly
+    zapisane 2026-08-26, ZANIM wind_direction_10m_dominant dolaczylo do
+    _DAILY_FIELDS (2026-08-31) - te dwa realne payloady legalnie go nie
+    maja. _parse_daily_response() ma to pole opcjonalne (.get()) wlasnie
+    dlatego - sprawdzamy tu wprost, ze brak pola daje None, nie KeyError,
+    zeby ten test od razu wywalil sie, gdyby ktos przypadkiem cofnal to na
+    wymagane pole."""
+    for fixture in ("arctic_forecast_result.json", "arctic_archive_result.json"):
+        rows = _parse_daily_response(_load_fixture(fixture))
+        assert all(r["wind_direction_deg"] is None for r in rows)
+
+
+def test_parse_daily_response_reads_wind_direction_when_present():
+    """Recznie zbudowany payload (nie zywa odpowiedz - previous_runs.py ma
+    ten sam zastrzezenie o niezweryfikowanych nazwach pol, ale
+    wind_direction_10m_dominant to standardowa, udokumentowana zmienna
+    dobowa Open-Meteo, ten sam wzorzec co reszta _DAILY_FIELDS)."""
+    payload = {
+        "daily": {
+            "time": ["2026-08-26", "2026-08-27"],
+            "temperature_2m_max": [3.8, 6.2],
+            "temperature_2m_min": [0.5, 0.0],
+            "precipitation_sum": [0.0, 0.0],
+            "wind_speed_10m_max": [14.5, 6.8],
+            "pressure_msl_mean": [1023.9, 1024.9],
+            "wind_direction_10m_dominant": [245.0, 10.0],
+        }
+    }
+    rows = _parse_daily_response(payload)
+    assert rows[0]["wind_direction_deg"] == 245.0
+    assert rows[1]["wind_direction_deg"] == 10.0
+
+
 def test_parse_raises_keyerror_on_missing_daily_key():
     """Zamiast cicho zwrocic pusta liste przy zmianie ksztaltu odpowiedzi
     API (patrz timdr-signal-framework SS4 o cichych awariach schematu)."""
