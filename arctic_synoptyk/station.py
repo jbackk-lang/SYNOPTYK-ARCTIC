@@ -53,3 +53,86 @@ LONGYEARBYEN = ArcticStation(
     grid_lat=78.20738,
     grid_lon=15.697675,
 )
+
+# ── Pozostałe stacje (dodane 2026-08-31, na wyraźną prośbę użytkownika:
+# "stacje arktyczne 3-5 najważniejszych" + "i polska na wyspie") ──
+#
+# W odróżnieniu od LONGYEARBYEN, `grid_elevation_m`/`grid_lat`/`grid_lon`
+# poniżej są None - nie zweryfikowane jeszcze na żywym zapytaniu do
+# Open-Meteo (patrz docstring ArcticStation wyżej: te pola wypełnia się
+# DOPIERO po pierwszym realnym fetchu, żeby nie zgadywać). Współrzędne i
+# `declared_altitude_m` pochodzą z publicznych źródeł (Wikipedia/NOAA GML/
+# strony instytucji), zweryfikowane wyszukiwaniem 2026-08-31 - nie z
+# pomiaru w tym repo.
+
+# Polska Stacja Polarna Hornsund im. Stanisława Siedleckiego (IGF PAN) -
+# jedyna POLSKA całoroczna stacja badawcza w Arktyce, południowy
+# Spitsbergen (fiord Hornsund). φ=N77.00, λ=E15.5, 7 m n.p.m.
+HORNSUND = ArcticStation(
+    name="Hornsund_Polska_Stacja_Polarna",
+    lat=77.00,
+    lon=15.5,
+    declared_altitude_m=7.0,
+)
+
+# Ny-Ålesund, Svalbard - najdalej na północ wysunięta stała osada
+# badawcza na świecie (~79°N), wielonarodowe konsorcjum stacji
+# (m.in. AWI, CNR, NPI) na tej samej wyspie co Longyearbyen/Hornsund -
+# dobry punkt porównawczy w obrębie jednego archipelagu.
+NY_ALESUND = ArcticStation(
+    name="Ny_Alesund_Svalbard",
+    lat=78.92500,
+    lon=11.92222,
+    declared_altitude_m=15.0,
+)
+
+# Alert, Nunavut (Kanada) - najbardziej na północ wysunięta stale
+# zamieszkana osada świata (82°30'N, Wyspa Ellesmere'a, 817 km od
+# bieguna północnego) - baza wojskowa CFS Alert + stacja WMO/GAW.
+ALERT = ArcticStation(
+    name="Alert_Nunavut_Kanada",
+    lat=82.49917,
+    lon=-62.34583,
+    declared_altitude_m=30.0,
+)
+
+# Utqiagvik (dawniej Barrow), Alaska (USA) - najbardziej na północ
+# wysunięte miasto USA, kluczowa amerykańska stacja klimatyczna NOAA
+# (Barrow Atmospheric Baseline Observatory).
+UTQIAGVIK = ArcticStation(
+    name="Utqiagvik_Alaska",
+    lat=71.29056,
+    lon=-156.78861,
+    declared_altitude_m=3.0,
+)
+
+# Tiksi, Republika Sacha (Jakucja), Rosja - ważna arktyczna stacja
+# meteorologiczna nad Morzem Łaptiewów, wschodnia Syberia Arktyczna,
+# ujście Leny.
+TIKSI = ArcticStation(
+    name="Tiksi_Rosja",
+    lat=71.650,
+    lon=128.867,
+    declared_altitude_m=10.0,
+)
+
+# Polska Stacja Antarktyczna im. Henryka Arctowskiego (IBB PAN), Wyspa
+# Króla Jerzego, Szetlandy Południowe - UWAGA: to ANTARKTYDA, przeciwna
+# półkula względem reszty tego modułu (SYNOPTYK-ARCTIC = Arktyka).
+# Dodana świadomie na wyraźną prośbę użytkownika ("i polska na wyspie" +
+# potwierdzenie linkiem do arctowski.aq), NIE przez pomyłkę nazewniczą -
+# druga (obok Hornsund) polska całoroczna stacja polarna, więc naturalnie
+# pasuje do porównania "polskie stacje polarne", mimo że łamie założenie
+# "Arktyka" z nazwy projektu. Sezony są tu ODWRÓCONE względem reszty
+# stacji (antarktyczne lato = grudzień-luty) - "noc polarna
+# listopad-luty" z README/HISTORIA_BUDOWY dotyczy PÓŁKULI PÓŁNOCNEJ i
+# NIE ma zastosowania do tej jednej stacji.
+ARCTOWSKI = ArcticStation(
+    name="Arctowski_Antarktyda",
+    lat=-62.160140,
+    lon=-58.473247,
+    declared_altitude_m=2.0,
+)
+
+STATIONS = [LONGYEARBYEN, HORNSUND, NY_ALESUND, ALERT, UTQIAGVIK, TIKSI, ARCTOWSKI]
+STATIONS_BY_NAME = {s.name: s for s in STATIONS}

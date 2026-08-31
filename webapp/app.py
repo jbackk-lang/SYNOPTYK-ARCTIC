@@ -40,6 +40,20 @@ Endpointy:
 Ścieżki do plików CSV są modułowymi stałymi (REAL_CSV/DEMO_CSV) właśnie po
 to, żeby testy mogły je podmienić (monkeypatch) na izolowane pliki
 tymczasowe - appka nigdy nie pisze do CSV, tylko czyta, więc to bezpieczne.
+
+## Wiele stacji (dodane 2026-08-31)
+
+`/api/status`, `/api/real_bias`, `/api/latest_readings` i `POST /api/collect`
+przyjmują teraz opcjonalny query param `?station=<nazwa>` (patrz
+`arctic_synoptyk.station.STATIONS_BY_NAME` - dokładnie te same nazwy, co w
+kolumnie `station` w CSV). Brak parametru = domyślnie `DEFAULT_STATION`
+(Longyearbyen) - CELOWO, żeby istniejące wywołania (i istniejące testy w
+`tests/test_webapp.py` sprzed tej zmiany) dalej działały bez modyfikacji.
+Nieznana nazwa stacji -> HTTP 404 (jawny błąd, nie cichy fallback - ten
+sam wzorzec co `ArcticStation`/`station.py`, patrz tamten docstring o
+`topomap_data.py` w Synoptyk-v2.0). Nowy `GET /api/stations` daje
+frontendowi listę wszystkich stacji do zbudowania dropdowna, bez
+duplikowania jej w JS.
 """
 from __future__ import annotations
 
@@ -47,21 +61,33 @@ import csv as _csv
 from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from arctic_synoptyk.bias import compute_lead_bias
 from arctic_synoptyk.offline import classify_staleness
-from arctic_synoptyk.station import LONGYEARBYEN
+from arctic_synoptyk.station import LONGYEARBYEN, STATIONS, STATIONS_BY_NAME
 from run_arctic import collect as _collect_arctic_data
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REAL_CSV = BASE_DIR / "arctic_forecast_snapshots.csv"
 DEMO_CSV = BASE_DIR / "demo_synthetic_arctic_snapshots.csv"
-STATION = LONGYEARBYEN.name
+DEFAULT_STATION = LONGYEARBYEN.name
+STATION = DEFAULT_STATION  # zachowane dla wstecznej zgodnosci (patrz nizej)
 DEMO_STATION = "Longyearbyen_Svalbard_DEMO"
 MIN_SAMPLES = 5
+
+
+def _resolve_station(station: str | None):
+    """`?station=` -> ArcticStation, albo DEFAULT_STATION gdy brak param.
+    Nieznana nazwa -> 404 jawnie (patrz "Wiele stacji" w docstringu
+    modulu) - zamiast cicho spasc na domyslna stacje, co ukrywaloby literowke
+    w URL/froncie."""
+    name = station or DEFAULT_STATION
+    if name not in STATIONS_BY_NAME:
+        raise HTTPException(status_code=404, detail=f"Nieznana stacja: {name!r}")
+    return STATIONS_BY_NAME[name]
 
 app = FastAPI(title="SYNOPTYK-ARCTIC Dashboard")
 
@@ -83,9 +109,23 @@ def _read_rows(csv_path: Path, station: str) -> list[dict]:
     return [r for r in rows if r.get("station") == station]
 
 
+@app.get("/api/stations")
+def stations() -> dict:
+    """Lista wszystkich stacji (nazwa + wspolrzedne) do zbudowania
+    dropdowna w dashboardzie - patrz "Wiele stacji" w docstringu modulu."""
+    return {
+        "stations": [
+            {"name": s.name, "lat": s.lat, "lon": s.lon}
+            for s in STATIONS
+        ],
+        "default": DEFAULT_STATION,
+    }
+
+
 @app.get("/api/status")
-def status() -> dict:
-    rows = _read_rows(REAL_CSV, STATION)
+def status(station: str | None = None) -> dict:
+    st = _resolve_station(station)
+    rows = _read_rows(REAL_CSV, st.name)
     issue_dates = sorted({r["issue_date"] for r in rows if r.get("issue_date")})
     last_issue_date = issue_dates[-1] if issue_dates else None
 
@@ -99,9 +139,9 @@ def status() -> dict:
         staleness_label = level.label_pl
 
     return {
-        "station": STATION,
-        "lat": LONGYEARBYEN.lat,
-        "lon": LONGYEARBYEN.lon,
+        "station": st.name,
+        "lat": st.lat,
+        "lon": st.lon,
         "n_rows_real": len(rows),
         "n_days_collected": len(issue_dates),
         "last_issue_date": last_issue_date,
@@ -112,9 +152,10 @@ def status() -> dict:
 
 
 @app.get("/api/real_bias")
-def real_bias() -> dict:
-    official = compute_lead_bias(str(REAL_CSV), STATION, min_samples=MIN_SAMPLES)
-    raw = compute_lead_bias(str(REAL_CSV), STATION, min_samples=1)
+def real_bias(station: str | None = None) -> dict:
+    st = _resolve_station(station)
+    official = compute_lead_bias(str(REAL_CSV), st.name, min_samples=MIN_SAMPLES)
+    raw = compute_lead_bias(str(REAL_CSV), st.name, min_samples=1)
     return {
         "official": official,
         "raw_counts": {lead: v["n"] for lead, v in raw.items()},
@@ -147,7 +188,7 @@ def demo_bias() -> dict:
 
 
 @app.get("/api/latest_readings")
-def latest_readings(limit: int = 20) -> dict:
+def latest_readings(limit: int = 20, station: str | None = None) -> dict:
     """Surowe wiersze z REAL_CSV (obu źródeł - "prognoza" i
     "archiwum_openmeteo"), posortowane malejąco po (issue_date, target_date).
 
@@ -156,7 +197,8 @@ def latest_readings(limit: int = 20) -> dict:
     się pokazuje, kolektor faktycznie pisze dane; brak wpisów dla
     lead_days=0 w /api/real_bias to wtedy potwierdzone kwestia progu/
     opóźnienia archiwum, a nie tego, że nic się nie zbiera."""
-    rows = _read_rows(REAL_CSV, STATION)
+    st = _resolve_station(station)
+    rows = _read_rows(REAL_CSV, st.name)
     rows_sorted = sorted(
         rows,
         key=lambda r: (r.get("issue_date", ""), r.get("target_date", "")),
@@ -166,12 +208,21 @@ def latest_readings(limit: int = 20) -> dict:
 
 
 @app.post("/api/collect")
-def collect() -> dict:
+def collect(station: str | None = None) -> dict:
     """Uruchamia faktyczne pobranie nowych danych (Open-Meteo) i dopisanie
-    do REAL_CSV - dokladnie ta sama logika co `python run_arctic.py`
-    (wspolna funkcja `collect()` w run_arctic.py), wywolana tutaj z
-    ABSOLUTNA sciezka REAL_CSV (nie relatywna domyslna z run_arctic.py),
-    zeby wynik NIE zalezal od katalogu roboczego procesu uvicorn.
+    do REAL_CSV dla JEDNEJ wybranej stacji (`?station=`, domyslnie
+    DEFAULT_STATION) - dokladnie ta sama logika co `python run_arctic.py`
+    dla tej stacji (wspolna funkcja `collect()` w run_arctic.py), wywolana
+    tutaj z ABSOLUTNA sciezka REAL_CSV (nie relatywna domyslna z
+    run_arctic.py), zeby wynik NIE zalezal od katalogu roboczego procesu
+    uvicorn.
+
+    CELOWO tylko jedna stacja na klikniecie (nie wszystkie STATIONS na
+    raz, w odroznieniu od run_arctic.main()/collect_all()) - przycisk w
+    dashboardzie dziala na AKTUALNIE WYBRANEJ stacji z dropdowna, wiec
+    klikniecie ma szybko i przewidywalnie odswiezyc TO, na co uzytkownik
+    aktualnie patrzy, bez czekania na 7 zapytan do Open-Meteo naraz.
+    Zebranie wszystkich stacji na raz nadal robi codzienne `run_arctic.py`.
 
     Powod istnienia tego przycisku: "Odswiez teraz" w dashboardzie tylko
     PONOWNIE CZYTA aktualny stan CSV z dysku - jesli nikt wczesniej nie
@@ -181,7 +232,8 @@ def collect() -> dict:
     zgloszeniu tego jako bledu - to byla mylaca nazwa/workflow, nie blad
     w kodzie odswiezania). Ten endpoint pozwala zrobic OBIE rzeczy jednym
     kliknieciem w przegladarce, bez przelaczania sie do terminala/`run.bat`."""
-    return _collect_arctic_data(csv_path=str(REAL_CSV), station=LONGYEARBYEN)
+    st = _resolve_station(station)
+    return _collect_arctic_data(csv_path=str(REAL_CSV), station=st)
 
 
 @app.get("/", response_class=HTMLResponse)

@@ -82,12 +82,29 @@
   #refresh-btn:hover, #collect-btn:hover { background: var(--accent); color: #08110f; }
   #refresh-btn:disabled, #collect-btn:disabled { opacity: 0.5; cursor: default; background: var(--accent-dim); color: var(--text); }
   footer { color: var(--muted); font-size: 11px; margin-top: 24px; border-top: 1px solid var(--panel-border); padding-top: 12px; }
+  /* Przelacznik stacji (dodane 2026-08-31, wiele stacji naraz - patrz
+     "Wiele stacji" w webapp/app.py) - trzyma sie stylu reszty appki
+     (mono font, akcent), zeby nie wygladal jak obcy element. */
+  #station-select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--accent-dim);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: var(--mono);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .header-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
 </style>
 </head>
 <body>
 
-<h1>🧊 SYNOPTYK-ARCTIC — Dashboard</h1>
-<div class="sub">Longyearbyen, Svalbard &mdash; dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).</div>
+<div class="header-row">
+  <h1 style="margin:0;">🧊 SYNOPTYK-ARCTIC — Dashboard</h1>
+  <select id="station-select" onchange="onStationChange()"><option>ładowanie stacji…</option></select>
+</div>
+<div class="sub" id="station-sub">dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).</div>
 <div id="global-error" class="warn-banner" style="display:none;"></div>
 
 <div class="grid">
@@ -134,7 +151,7 @@
 </div>
 
 <footer>
-  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/status, /api/real_bias, /api/demo_bias
+  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/stations, /api/status, /api/real_bias, /api/demo_bias, /api/latest_readings
 </footer>
 
 <script>
@@ -175,6 +192,19 @@ function renderStatus(s) {
     <div class="stat"><span class="k">Świeżość</span><span class="v">${staleBadge}</span></div>
     <div class="stat"><span class="k">Próg min_samples</span><span class="v">${s.min_samples_required}</span></div>
   `;
+  // Podpis pod naglowkiem trzyma sie danych z /api/status, wiec zawsze
+  // pokazuje AKTUALNIE wybrana stacje bez osobnej logiki synchronizacji.
+  const sub = document.getElementById("station-sub");
+  const displayName = s.station.replace(/_/g, " ");
+  let note = `${displayName} (${s.lat}, ${s.lon}) — dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).`;
+  // Arctowski to ANTARKTYDA (przeciwna polkula) - jedyna stacja w tym
+  // zestawie, wiec jawne ostrzezenie tutaj, zeby nikt nie odczytal
+  // "noc polarna listopad-luty" z README (dotyczy polkuli polnocnej) jako
+  // uniwersalnej dla wszystkich stacji na dashboardzie.
+  if (s.station.includes("Antarktyda")) {
+    note += ` ⚠️ Ta stacja jest na PÓŁKULI POŁUDNIOWEJ (Antarktyda) — pory roku odwrócone względem reszty stacji.`;
+  }
+  sub.textContent = note;
 }
 
 function renderLatestReadings(data) {
@@ -285,12 +315,45 @@ async function loadSection(url, renderFn, label) {
   _showGlobalError();
 }
 
+// Stacja aktualnie wybrana w dropdownie - ladowana raz przy starcie z
+// /api/stations (data.default = Longyearbyen), potem zmieniana tylko
+// przez onStationChange(). Demo (/api/demo_bias) NIE bierze tego
+// parametru - to zawsze jedna, oddzielna stacja syntetyczna
+// (Longyearbyen_Svalbard_DEMO, patrz webapp/app.py), niezalezna od
+// wyboru realnej stacji.
+let currentStation = null;
+
+async function loadStations() {
+  const sel = document.getElementById("station-select");
+  try {
+    const data = await getJSON("/api/stations");
+    currentStation = data.default;
+    sel.innerHTML = data.stations
+      .map(s => `<option value="${s.name}">${s.name.replace(/_/g, " ")}</option>`)
+      .join("");
+    sel.value = currentStation;
+  } catch (e) {
+    console.error("[SYNOPTYK-ARCTIC] Blad /api/stations:", e);
+    sel.innerHTML = `<option>błąd ładowania listy stacji</option>`;
+  }
+}
+
+function onStationChange() {
+  currentStation = document.getElementById("station-select").value;
+  loadAll();
+}
+
+function _withStation(url) {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}station=${encodeURIComponent(currentStation)}`;
+}
+
 async function loadAll() {
   await Promise.all([
-    loadSection("/api/status", renderStatus, "Status stacji"),
-    loadSection("/api/real_bias", renderRealBias, "Trafność (realne)"),
+    loadSection(_withStation("/api/status"), renderStatus, "Status stacji"),
+    loadSection(_withStation("/api/real_bias"), renderRealBias, "Trafność (realne)"),
     loadSection("/api/demo_bias", renderDemoBias, "Demo"),
-    loadSection("/api/latest_readings", renderLatestReadings, "Surowe odczyty"),
+    loadSection(_withStation("/api/latest_readings"), renderLatestReadings, "Surowe odczyty"),
   ]);
 }
 
@@ -307,7 +370,7 @@ async function collectNow() {
   btn.disabled = true;
   status.textContent = "⏳ Łączenie z Open-Meteo, pobieranie prognozy i archiwum...";
   try {
-    const r = await fetch("/api/collect", { method: "POST", cache: "no-store" });
+    const r = await fetch(_withStation("/api/collect"), { method: "POST", cache: "no-store" });
     const data = await r.json();
     const parts = [];
     parts.push(`✅ dopisano ${data.n_forecast_added} wierszy prognozy + ${data.n_archive_added} wierszy archiwum`);
@@ -326,7 +389,7 @@ async function collectNow() {
   }
 }
 
-loadAll();
+loadStations().then(loadAll);
 </script>
 </body>
 </html>

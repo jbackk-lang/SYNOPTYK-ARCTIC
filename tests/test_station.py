@@ -2,7 +2,10 @@ import sys
 import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from arctic_synoptyk.station import ArcticStation, LONGYEARBYEN
+from arctic_synoptyk.station import (
+    ArcticStation, LONGYEARBYEN, HORNSUND, NY_ALESUND, ALERT, UTQIAGVIK,
+    TIKSI, ARCTOWSKI, STATIONS, STATIONS_BY_NAME,
+)
 
 
 def test_longyearbyen_no_uhi_field():
@@ -49,3 +52,52 @@ def test_no_silent_default_for_missing_station():
     sig = inspect.signature(ArcticStation)
     assert sig.parameters["lat"].default is inspect.Parameter.empty
     assert sig.parameters["lon"].default is inspect.Parameter.empty
+
+
+# ── Wiele stacji (dodane 2026-08-31) ────────────────────────────────────
+
+def test_stations_list_has_seven_unique_entries():
+    """Longyearbyen + 6 dodanych 2026-08-31 (Hornsund, Ny-Alesund, Alert,
+    Utqiagvik, Tiksi, Arctowski) - nazwy musza byc unikalne, bo `station`
+    to klucz idempotentnosci w snapshots.py (patrz append_snapshot)."""
+    assert len(STATIONS) == 7
+    names = [s.name for s in STATIONS]
+    assert len(names) == len(set(names)), "zduplikowana nazwa stacji zepsulaby idempotentnosc CSV"
+
+
+def test_stations_by_name_matches_stations_list():
+    assert set(STATIONS_BY_NAME) == {s.name for s in STATIONS}
+    for s in STATIONS:
+        assert STATIONS_BY_NAME[s.name] is s
+
+
+def test_new_stations_have_no_uhi_field_either():
+    """Ta sama zasada co dla LONGYEARBYEN (test wyzej) - zadna stacja
+    zdalna/polarna w tym module nie ma UHI, niezaleznie od polkuli."""
+    for s in (HORNSUND, NY_ALESUND, ALERT, UTQIAGVIK, TIKSI, ARCTOWSKI):
+        assert not hasattr(s, "uhi")
+
+
+def test_all_stations_have_plausible_coordinates():
+    """Luzna kontrola sanity - szerokosc geograficzna w [-90, 90], dlugosc
+    w [-180, 180], i (poza Arctowskim) polkula polnocna wysoka (>60N),
+    bo to modul 'arctic'. Arctowski jest jedynym swiadomym wyjatkiem -
+    patrz test nizej."""
+    for s in STATIONS:
+        assert -90.0 <= s.lat <= 90.0
+        assert -180.0 <= s.lon <= 180.0
+    non_antarctic = [s for s in STATIONS if s is not ARCTOWSKI]
+    assert all(s.lat > 60.0 for s in non_antarctic), (
+        "wszystkie stacje poza Arctowskim powinny byc arktyczne (>60N)"
+    )
+
+
+def test_arctowski_is_the_one_antarctic_exception():
+    """Arctowski (Polska Stacja Antarktyczna) zostal dodany swiadomie na
+    wyrazna prosbe uzytkownika, mimo ze modul nazywa sie 'arctic' - to
+    JEDYNA stacja na polkuli poludniowej w tym zestawie. Nazwa stacji ma
+    w sobie 'Antarktyda' (patrz station.py) wlasnie po to, zeby ten fakt
+    byl widoczny wszedzie, gdzie nazwa stacji sie pojawia (CSV, dashboard,
+    API) - nie tylko w komentarzu w kodzie."""
+    assert ARCTOWSKI.lat < 0, "Antarktyda = polkula poludniowa, szerokosc ujemna"
+    assert "Antarktyda" in ARCTOWSKI.name

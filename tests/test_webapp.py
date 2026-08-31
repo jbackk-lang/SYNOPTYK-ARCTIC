@@ -347,3 +347,116 @@ def test_collect_endpoint_passes_through_fetch_errors():
         finally:
             app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
             app_module._collect_arctic_data = old_collect
+
+
+# ── Wiele stacji (dodane 2026-08-31) ────────────────────────────────────
+
+HORNSUND_STATION = "Hornsund_Polska_Stacja_Polarna"
+
+
+def test_stations_endpoint_lists_full_registry():
+    """GET /api/stations - lista dla dropdowna w dashboardzie, patrz
+    'Wiele stacji' w docstringu webapp/app.py. `default` musi byc
+    Longyearbyen - to jest stacja, na ktora domyslnie spadaja wszystkie
+    inne endpointy bez ?station=, zeby stare wywolania/testy dalej
+    dzialaly bez zmian."""
+    client = TestClient(app_module.app)
+    r = client.get("/api/stations")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["default"] == STATION
+    names = {s["name"] for s in body["stations"]}
+    assert STATION in names
+    assert HORNSUND_STATION in names
+    assert len(body["stations"]) == 7
+
+
+def test_status_filters_by_station_param():
+    """?station=<inna stacja> ma zwrocic dane TEJ stacji, nie domyslnego
+    Longyearbyen - wiersze zapisane pod inna nazwa stacji nie powinny sie
+    tam wcale pojawic (to samo filtrowanie po kolumnie 'station', ktore
+    _read_rows() juz robilo dla Longyearbyen od poczatku)."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-27", 5.0)],
+                         issue_date=date(2026, 8, 27), source="prognoza")
+        append_snapshot(real_csv, HORNSUND_STATION, [_forecast_row("2026-08-27", -2.0)],
+                         issue_date=date(2026, 8, 27), source="prognoza")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            r_default = client.get("/api/status")
+            r_hornsund = client.get(f"/api/status?station={HORNSUND_STATION}")
+            assert r_default.json()["station"] == STATION
+            assert r_default.json()["n_rows_real"] == 1
+            assert r_hornsund.json()["station"] == HORNSUND_STATION
+            assert r_hornsund.json()["n_rows_real"] == 1
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_latest_readings_filters_by_station_param():
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-27", 5.0)],
+                         issue_date=date(2026, 8, 27), source="prognoza")
+        append_snapshot(real_csv, HORNSUND_STATION, [_forecast_row("2026-08-27", -2.0)],
+                         issue_date=date(2026, 8, 27), source="prognoza")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            r = client.get(f"/api/latest_readings?station={HORNSUND_STATION}")
+            body = r.json()
+            assert body["n_total"] == 1
+            assert body["rows"][0]["station"] == HORNSUND_STATION
+            assert body["rows"][0]["temp_max_c"] == "-2.0"
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_unknown_station_returns_404_not_silent_fallback():
+    """Ten sam duch co test_no_silent_default_for_missing_station w
+    test_station.py: literowka w ?station= ma dac jawny blad, nie cicho
+    spasc na Longyearbyen (co ukrywaloby, ze uzytkownik/front wyslal zla
+    nazwe)."""
+    client = TestClient(app_module.app)
+    for path in ("/api/status", "/api/real_bias", "/api/latest_readings"):
+        r = client.get(f"{path}?station=Nieistniejaca_Stacja")
+        assert r.status_code == 404
+    r = client.post("/api/collect?station=Nieistniejaca_Stacja")
+    assert r.status_code == 404
+
+
+def test_collect_endpoint_uses_requested_station_not_always_longyearbyen():
+    """POST /api/collect?station=<X> ma wywolac collect() z ArcticStation
+    odpowiadajacym X, nie zawsze LONGYEARBYEN - to byla poprzednia,
+    jednostacyjna wersja tego endpointu."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        old_collect = app_module._collect_arctic_data
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+
+        captured = {}
+
+        def fake_collect(csv_path, station):
+            captured["station"] = station
+            return {
+                "date": "2026-08-31", "station": station.name,
+                "n_forecast_added": 1, "n_archive_added": 0,
+                "forecast_error": None, "archive_error": None,
+                "bias": {}, "raw_counts": None,
+            }
+
+        app_module._collect_arctic_data = fake_collect
+        try:
+            client = TestClient(app_module.app)
+            r = client.post(f"/api/collect?station={HORNSUND_STATION}")
+            assert r.status_code == 200
+            assert captured["station"].name == HORNSUND_STATION
+            assert r.json()["station"] == HORNSUND_STATION
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+            app_module._collect_arctic_data = old_collect

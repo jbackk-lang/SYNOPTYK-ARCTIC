@@ -12,8 +12,8 @@ from datetime import date, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from arctic_synoptyk.station import LONGYEARBYEN
-from run_arctic import collect
+from arctic_synoptyk.station import LONGYEARBYEN, HORNSUND, STATIONS
+from run_arctic import collect, collect_all
 
 STATION = LONGYEARBYEN
 
@@ -88,3 +88,52 @@ def test_collect_prunes_rows_older_than_keep_days():
         # wiersze starsze niz 3 dni wstecz (4..10 dni wstecz = 7 wierszy)
         # powinny zostac przeniesione, 1-3 dni wstecz + dzisiejsza prognoza zostaja
         assert result["n_pruned"] == 7
+
+
+# ── collect_all() - wiele stacji na wspolnym CSV (dodane 2026-08-31) ────
+
+def test_collect_all_writes_every_station_to_shared_csv():
+    """collect_all() ma zebrac KAZDA stacje z `stations` do TEGO SAMEGO
+    pliku CSV, rozroznionych po kolumnie 'station' - nie osobne pliki per
+    stacja (patrz 'Wiele stacji' w docstringu run_arctic.py)."""
+    with tempfile.TemporaryDirectory() as d:
+        csv_path = os.path.join(d, "snap.csv")
+        today = date.today()
+
+        def fake_forecast(station, forecast_days):
+            return [_forecast_row(today.isoformat())]
+
+        def fake_archive(station, past_days):
+            return []
+
+        two_stations = [LONGYEARBYEN, HORNSUND]
+        results = collect_all(csv_path, stations=two_stations,
+                               _fetch_forecast=fake_forecast, _fetch_archive=fake_archive)
+        assert len(results) == 2
+        assert {r["station"] for r in results} == {LONGYEARBYEN.name, HORNSUND.name}
+
+        with open(csv_path, encoding="utf-8") as f:
+            import csv as _csv
+            rows = list(_csv.DictReader(f))
+        stations_in_csv = {r["station"] for r in rows}
+        assert stations_in_csv == {LONGYEARBYEN.name, HORNSUND.name}
+
+
+def test_collect_all_defaults_to_full_station_registry():
+    """Bez jawnego `stations=`, collect_all() powinno przejsc PO WSZYSTKICH
+    zarejestrowanych stacjach (STATIONS) - to jest sciezka, ktorej uzywa
+    main()/run.bat/zaplanowane zadanie, zeby jedno uruchomienie zebralo
+    wszystko naraz."""
+    with tempfile.TemporaryDirectory() as d:
+        csv_path = os.path.join(d, "snap.csv")
+        today = date.today()
+
+        def fake_forecast(station, forecast_days):
+            return [_forecast_row(today.isoformat())]
+
+        def fake_archive(station, past_days):
+            return []
+
+        results = collect_all(csv_path, _fetch_forecast=fake_forecast, _fetch_archive=fake_archive)
+        assert len(results) == len(STATIONS)
+        assert {r["station"] for r in results} == {s.name for s in STATIONS}
