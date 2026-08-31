@@ -62,10 +62,11 @@
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--panel-border); }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: normal; }
-  /* "gruba strzalka" kierunku wiatru - ten sam pojedynczy znak co
-     Synoptyk-v2.0 (WIND_ARROWS), tylko wyraznie wiekszy/pogrubiony, zeby
-     dalo sie go odczytac na pierwszy rzut oka w waskiej komorce tabeli. */
-  .wind-arrow { font-size: 18px; font-weight: 700; color: var(--accent); }
+  /* Strzalka kierunku wiatru - ten sam pojedynczy znak co Synoptyk-v2.0
+     (WIND_ARROWS), zwykly styl (bez pogrubienia/powiekszenia - poprzednia
+     wersja byla za gruba/duza, patrz HISTORIA_BUDOWY.md), tylko lekko
+     wyrozniona kolorem, zeby nie zlewala sie z reszta tabeli. */
+  .wind-arrow { color: var(--accent); }
   canvas { max-height: 260px; }
   #refresh-btn, #collect-btn {
     background: var(--accent-dim);
