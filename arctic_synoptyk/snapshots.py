@@ -28,7 +28,7 @@ from typing import Any, Iterable
 FIELDNAMES = [
     "station", "target_date", "issue_date", "lead_days",
     "temp_min_c", "temp_avg_c_approx", "temp_max_c",
-    "precip_mm", "pressure_hpa", "wind_kmh", "source",
+    "precip_mm", "pressure_hpa", "wind_kmh", "wind_direction_deg", "source",
 ]
 
 
@@ -37,17 +37,11 @@ def _lead_days(target_date_str: str, issue_date: date) -> int:
     return (td - issue_date).days
 
 
-def _existing_keys(csv_path: str) -> set[tuple[str, str, str, str]]:
-    """Zbior kluczy (station, target_date, issue_date, source) juz obecnych
-    w CSV - do idempotentnego dopisywania (patrz append_snapshot)."""
+def _read_rows(csv_path: str) -> list[dict[str, str]]:
     if not os.path.isfile(csv_path):
-        return set()
+        return []
     with open(csv_path, newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    return {
-        (r["station"], r["target_date"], r["issue_date"], r["source"])
-        for r in rows
-    }
+        return list(csv.DictReader(f))
 
 
 def append_snapshot(
@@ -58,7 +52,9 @@ def append_snapshot(
     source: str,
 ) -> int:
     """Dopisuje wiersze do CSV (tworzy plik z nagłówkiem, jeśli nie istnieje).
-    Zwraca liczbę FAKTYCZNIE dopisanych wierszy (pomijając duplikaty).
+    Zwraca liczbę FAKTYCZNIE dopisanych (nowych) wierszy (pomijając
+    duplikaty) - patrz też "uzupelnianie brakujacych pol" nizej, to sie
+    liczy osobno i NIE wchodzi do tego zwracanego `n`.
 
     `records` to wynik `fetch.fetch_forecast()`/`fetch_archive()` (lista
     słowników z kluczem 'date' + wartości pogodowe) - `lead_days` liczone
@@ -72,31 +68,57 @@ def append_snapshot(
     `compute_lead_bias()` - wygladalo na przyrost danych, a w
     rzeczywistosci to byl ten sam, pojedynczy dzien zduplikowany
     (znaleziono to po tym, jak recznie uruchomiony `run_arctic.py`
-    kilka razy jednego dnia dal n=5 dla lead_days=0 zamiast n=1)."""
-    existing = _existing_keys(csv_path)
-    file_exists = os.path.isfile(csv_path)
+    kilka razy jednego dnia dal n=5 dla lead_days=0 zamiast n=1).
+
+    UZUPELNIANIE BRAKUJACYCH POL na juz istniejacym kluczu: gdy klucz juz
+    jest w CSV, ale ma puste `wind_direction_deg` (np. wiersz zapisany
+    2026-08-31 PRZED dodaniem tego pola do fetch.py w tym samym dniu -
+    idempotentnosc po kluczu inaczej trwale zablokowalaby mu ta wartosc,
+    dopoki nie zmieni sie `issue_date` jutro), a nowy `rec` faktycznie ma
+    te wartosc - dopisujemy ja do istniejacego wiersza zamiast go pomijac
+    w ciszy. Dotyczy tylko pol juz pustych (nigdy nie nadpisuje realnej
+    wartosci nowa) i nie zmienia zwracanego `n` (to nie jest nowy wiersz)."""
+    rows = _read_rows(csv_path)
+    index = {
+        (r["station"], r["target_date"], r["issue_date"], r["source"]): r
+        for r in rows
+    }
     rows_written = 0
-    with open(csv_path, "a", newline="", encoding="utf-8") as f:
+    for rec in records:
+        key = (station_name, rec["date"], issue_date.isoformat(), source)
+        existing_row = index.get(key)
+        if existing_row is not None:
+            new_dir = rec.get("wind_direction_deg")
+            if not existing_row.get("wind_direction_deg") and new_dir not in (None, ""):
+                existing_row["wind_direction_deg"] = new_dir
+            continue
+        new_row = {
+            "station": station_name,
+            "target_date": rec["date"],
+            "issue_date": issue_date.isoformat(),
+            "lead_days": _lead_days(rec["date"], issue_date),
+            "temp_min_c": rec["temp_min_c"],
+            "temp_avg_c_approx": rec["temp_avg_c_approx"],
+            "temp_max_c": rec["temp_max_c"],
+            "precip_mm": rec["precip_mm"],
+            "pressure_hpa": rec["pressure_hpa"],
+            "wind_kmh": rec["wind_kmh"],
+            # .get(): dodane 2026-08-31, PO tym jak demo_synthetic_fill.py
+            # i backfill_real_history.py zaczely wywolywac append_snapshot()
+            # z rekordami bez tego klucza w ogole (demo go nie generuje,
+            # Previous Runs API nie dostarcza kierunku w bezpieczny,
+            # niekolowy sposob - patrz backfill_real_history.py) - bez
+            # .get() te wywolania rzucalyby KeyError zamiast po prostu
+            # zostawic puste pole, jak kazdy inny brakujacy parametr w
+            # tym CSV.
+            "wind_direction_deg": rec.get("wind_direction_deg", ""),
+            "source": source,
+        }
+        rows.append(new_row)
+        index[key] = new_row
+        rows_written += 1
+    with open(csv_path, "w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(f, fieldnames=FIELDNAMES)
-        if not file_exists:
-            writer.writeheader()
-        for rec in records:
-            key = (station_name, rec["date"], issue_date.isoformat(), source)
-            if key in existing:
-                continue
-            writer.writerow({
-                "station": station_name,
-                "target_date": rec["date"],
-                "issue_date": issue_date.isoformat(),
-                "lead_days": _lead_days(rec["date"], issue_date),
-                "temp_min_c": rec["temp_min_c"],
-                "temp_avg_c_approx": rec["temp_avg_c_approx"],
-                "temp_max_c": rec["temp_max_c"],
-                "precip_mm": rec["precip_mm"],
-                "pressure_hpa": rec["pressure_hpa"],
-                "wind_kmh": rec["wind_kmh"],
-                "source": source,
-            })
-            existing.add(key)
-            rows_written += 1
+        writer.writeheader()
+        writer.writerows(rows)
     return rows_written

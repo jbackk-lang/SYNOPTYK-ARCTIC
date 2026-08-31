@@ -29,7 +29,7 @@ from .station import ArcticStation
 
 _DAILY_FIELDS = (
     "temperature_2m_max,temperature_2m_min,precipitation_sum,"
-    "wind_speed_10m_max,pressure_msl_mean"
+    "wind_speed_10m_max,pressure_msl_mean,wind_direction_10m_dominant"
 )
 
 FORECAST_BASE_URL = "https://api.open-meteo.com/v1/forecast"
@@ -44,9 +44,18 @@ def _parse_daily_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
     Rzuca KeyError, jeśli brakuje 'daily' albo 'time' - jawnie, zamiast
     cicho zwracać pustą listę (żeby zmiana kształtu odpowiedzi API nie
     przeszła niezauważona, patrz timdr-signal-framework §4 o cichych
-    awariach schematu)."""
+    awariach schematu). WYJĄTEK: `wind_direction_10m_dominant` jest
+    opcjonalne (`.get()`, None jeśli brak) - dodane 2026-08-31, PO
+    zapisaniu fixture'ów w tests/fixtures/*.json (patrz test_fetch.py), więc
+    te dwa realne, zapisane payloady legalnie go nie mają. Dla NOWYCH
+    zapytań pole jest zawsze w `_DAILY_FIELDS`, więc powinno być obecne -
+    ale traktujemy jego ewentualny brak jako brak danych (None), nie jako
+    zmianę kształtu odpowiedzi wartą wywalenia się (w odróżnieniu od
+    pozostałych pięciu pól, zweryfikowanych na żywym payloadzie i
+    wymaganych na sztywno)."""
     daily = payload["daily"]
     dates = daily["time"]
+    wind_dir_list = daily.get("wind_direction_10m_dominant")
 
     rows = []
     for i, d in enumerate(dates):
@@ -63,6 +72,7 @@ def _parse_daily_response(payload: dict[str, Any]) -> list[dict[str, Any]]:
             "precip_mm": daily["precipitation_sum"][i],
             "wind_kmh": daily["wind_speed_10m_max"][i],
             "pressure_hpa": daily["pressure_msl_mean"][i],
+            "wind_direction_deg": wind_dir_list[i] if wind_dir_list is not None else None,
         })
     return rows
 

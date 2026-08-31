@@ -43,7 +43,7 @@ from datetime import date, datetime, timedelta
 FIELDNAMES = [
     "station", "target_date", "issue_date", "lead_days",
     "temp_min_c", "temp_avg_c_approx", "temp_max_c",
-    "precip_mm", "pressure_hpa", "wind_kmh", "source",
+    "precip_mm", "pressure_hpa", "wind_kmh", "wind_direction_deg", "source",
 ]
 
 DEFAULT_KEEP_DAYS = 30
