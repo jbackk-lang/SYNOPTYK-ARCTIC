@@ -450,6 +450,92 @@ def test_unknown_station_returns_404_not_silent_fallback():
     assert r.status_code == 404
 
 
+# ── Prognoza 7 dni (dodane 2026-08-31) ──────────────────────────────────
+
+def test_forecast_outlook_empty_when_no_data():
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            r = client.get(f"/api/forecast_outlook?station={STATION}")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["issue_date"] is None
+            assert body["days"] == []
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_forecast_outlook_returns_only_latest_issue_date_sorted_by_target_date():
+    """Rdzen endpointu: wybiera TYLKO najswiezszy issue_date (nie miesza
+    starszych prognoz z roznych dni zbierania) i sortuje po target_date
+    rosnaco (dzien 0 -> +N), niezaleznie od kolejnosci zapisu w CSV."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        # Starsza prognoza (issue_date 2026-08-30) - NIE powinna sie pojawic.
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-31", 1.0)],
+                         issue_date=date(2026, 8, 30), source="prognoza")
+        # Najnowsza prognoza (issue_date 2026-08-31), zapisana w kolejnosci
+        # NIE rosnacej po target_date - endpoint ma i tak posortowac.
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-09-01", 5.0)],
+                         issue_date=date(2026, 8, 31), source="prognoza")
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-31", 3.0)],
+                         issue_date=date(2026, 8, 31), source="prognoza")
+        # Wiersz archiwum z tym samym (pozniejszym) issue_date - NIE jest
+        # "prognoza", nie powinien wplynac na wynik.
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-25", -1.0)],
+                         issue_date=date(2026, 8, 31), source="archiwum_openmeteo")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            body = client.get(f"/api/forecast_outlook?station={STATION}").json()
+            assert body["issue_date"] == "2026-08-31"
+            assert [d["target_date"] for d in body["days"]] == ["2026-08-31", "2026-09-01"]
+            assert body["days"][0]["temp_max_c"] == "3.0"
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_forecast_outlook_filters_by_station_param():
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-31", 5.0)],
+                         issue_date=date(2026, 8, 31), source="prognoza")
+        append_snapshot(real_csv, DEFAULT_STATION, [_forecast_row("2026-08-31", -8.0)],
+                         issue_date=date(2026, 8, 31), source="prognoza")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            body = client.get(f"/api/forecast_outlook?station={DEFAULT_STATION}").json()
+            assert len(body["days"]) == 1
+            assert body["days"][0]["temp_max_c"] == "-8.0"
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_forecast_outlook_unknown_station_404():
+    client = TestClient(app_module.app)
+    r = client.get("/api/forecast_outlook?station=Nieistniejaca_Stacja")
+    assert r.status_code == 404
+
+
+def test_index_page_has_forecast_outlook_panel():
+    """Regression: sam JS/HTML panelu 'Prognoza 7 dni' ma byc w
+    wyrenderowanej stronie (svg, tabela, funkcja renderujaca) - ten sam
+    plytki wzorzec co inne testy sprawdzajace obecnosc panelu w index.html."""
+    client = TestClient(app_module.app)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "Prognoza 7 dni" in r.text
+    assert "outlook-chart" in r.text
+    assert "renderForecastOutlook" in r.text
+    assert "/api/forecast_outlook" in r.text
+
+
 def test_collect_endpoint_uses_requested_station_not_always_longyearbyen():
     """POST /api/collect?station=<X> ma wywolac collect() z ArcticStation
     odpowiadajacym X, nie zawsze LONGYEARBYEN - to byla poprzednia,
