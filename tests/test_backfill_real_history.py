@@ -1,11 +1,11 @@
 """
 test_backfill_real_history.py — testy na wstrzykniętych fetcherach (żadnego
 żywego zapytania do Open-Meteo, ten sam wzorzec co test_previous_runs.py /
-test_webapp.py). Sprawdzają dwie rzeczy: 1) że build_prognoza_groups()
-poprawnie liczy issue_date z lead_days, 2) że backfill() faktycznie sprawia,
-iż compute_lead_bias() ma co policzyć NATYCHMIAST (cel tego modułu - patrz
-docstring backfill_real_history.py), bez czekania na kolejne dni
-run_arctic.py.
+test_webapp.py). Sprawdzają: 1) że build_prognoza_groups() poprawnie liczy
+issue_date z lead_days i przenosi temp/precip/wind do rekordu CSV, 2) że
+backfill() faktycznie sprawia, iż compute_lead_bias() ma co policzyć
+NATYCHMIAST (cel tego modułu - patrz docstring backfill_real_history.py),
+bez czekania na kolejne dni run_arctic.py, 3) wiązanie z retention.py.
 """
 import os
 import sys
@@ -23,23 +23,36 @@ STATION_NAME = STATION.name
 
 
 def _hourly_payload(dates, lead_values):
-    """Ten sam ksztalt co test_previous_runs.py::_hourly_payload - szczyt o
-    12:00, reszta godzin nizsza, zeby max() mial co wybrac."""
+    """lead_values: {lead: {date: {"temp_max_c":.., "precip_mm":.., "wind_kmh":..}}}.
+    Buduje payload w kształcie Previous Runs API dla trzech zmiennych na raz
+    (temperature_2m/precipitation/wind_speed_10m x każdy lead) - szczyt o
+    12:00 dla temp/wiatru (żeby max() miał co wybrać), cała wartość opadu w
+    godzinie 0 (żeby sum() dała dokładnie precip_mm), reszta godzin
+    niższa/zerowa."""
     times = []
-    fields = {f"temperature_2m_previous_day{n}": [] for n in lead_values}
+    fields = {}
+    for n in lead_values:
+        fields[f"temperature_2m_previous_day{n}"] = []
+        fields[f"precipitation_previous_day{n}"] = []
+        fields[f"wind_speed_10m_previous_day{n}"] = []
     for d in dates:
         for hour in range(24):
             times.append(f"{d}T{hour:02d}:00")
             for n, day_values in lead_values.items():
-                peak = day_values[d]
-                fields[f"temperature_2m_previous_day{n}"].append(peak if hour == 12 else peak - 5)
+                v = day_values[d]
+                fields[f"temperature_2m_previous_day{n}"].append(v["temp_max_c"] if hour == 12 else v["temp_max_c"] - 5)
+                fields[f"precipitation_previous_day{n}"].append(v["precip_mm"] if hour == 0 else 0.0)
+                fields[f"wind_speed_10m_previous_day{n}"].append(v["wind_kmh"] if hour == 12 else v["wind_kmh"] - 2)
     return {"hourly": {"time": times, **fields}}
 
 
 def test_build_prognoza_groups_computes_issue_date_from_lead():
     by_lead = {
-        1: {"2026-06-10": 5.0},
-        3: {"2026-06-10": 4.0, "2026-06-12": 6.0},
+        1: {"2026-06-10": {"temp_max_c": 5.0, "precip_mm": 1.2, "wind_kmh": 10.0}},
+        3: {
+            "2026-06-10": {"temp_max_c": 4.0, "precip_mm": 0.0, "wind_kmh": 8.0},
+            "2026-06-12": {"temp_max_c": 6.0, "precip_mm": 2.5, "wind_kmh": 12.0},
+        },
     }
     groups = build_prognoza_groups(by_lead)
 
@@ -48,16 +61,28 @@ def test_build_prognoza_groups_computes_issue_date_from_lead():
     # lead=3, target=06-10 -> issue=06-07 (jedyny wpis w tej grupie)
     assert groups[date(2026, 6, 7)] == [
         {"date": "2026-06-10", "temp_min_c": "", "temp_avg_c_approx": "",
-         "temp_max_c": 4.0, "precip_mm": "", "pressure_hpa": "", "wind_kmh": ""}
+         "temp_max_c": 4.0, "precip_mm": 0.0, "pressure_hpa": "", "wind_kmh": 8.0}
     ]
     # lead=1, target=06-10 -> issue=06-09 ; lead=3, target=06-12 -> issue=06-09
     # (ta sama grupa, dwa rozne (lead, target) daja ten sam issue_date)
     assert groups[date(2026, 6, 9)] == [
         {"date": "2026-06-10", "temp_min_c": "", "temp_avg_c_approx": "",
-         "temp_max_c": 5.0, "precip_mm": "", "pressure_hpa": "", "wind_kmh": ""},
+         "temp_max_c": 5.0, "precip_mm": 1.2, "pressure_hpa": "", "wind_kmh": 10.0},
         {"date": "2026-06-12", "temp_min_c": "", "temp_avg_c_approx": "",
-         "temp_max_c": 6.0, "precip_mm": "", "pressure_hpa": "", "wind_kmh": ""},
+         "temp_max_c": 6.0, "precip_mm": 2.5, "pressure_hpa": "", "wind_kmh": 12.0},
     ]
+
+
+def test_build_prognoza_groups_leaves_missing_variable_empty():
+    """Jesli agregacja dla jednej zmiennej nie ma wartosci na dany dzien
+    (patrz daily_aggregates_by_lead - pomija brakujace, nie zgaduje), rekord
+    CSV dostaje dla niej pusty string, reszta kolumn zostaje wypelniona."""
+    by_lead = {1: {"2026-06-10": {"temp_max_c": 5.0, "wind_kmh": 10.0}}}  # brak precip_mm
+    groups = build_prognoza_groups(by_lead)
+    [record] = groups[date(2026, 6, 9)]
+    assert record["precip_mm"] == ""
+    assert record["temp_max_c"] == 5.0
+    assert record["wind_kmh"] == 10.0
 
 
 def _archive_row(d, temp_max):
@@ -67,13 +92,17 @@ def _archive_row(d, temp_max):
     }
 
 
+def _values(temp_max_c=5.0, precip_mm=0.5, wind_kmh=8.0):
+    return {"temp_max_c": temp_max_c, "precip_mm": precip_mm, "wind_kmh": wind_kmh}
+
+
 def test_backfill_gives_compute_lead_bias_something_to_show_immediately():
     """Cel calego modulu: bez backfillu compute_lead_bias() jest pusty
     dopoki nie zbierze sie >= min_samples dni NA ZYWO (dni-tygodnie). Ten
     test sprawdza, ze jedno wywolanie backfill() z wystarczajaca proba
     historyczna daje wynik od razu."""
     dates = [f"2026-06-{d:02d}" for d in range(1, 8)]  # 7 dni
-    by_lead = {1: {d: 5.0 for d in dates}}
+    by_lead = {1: {d: _values(temp_max_c=5.0) for d in dates}}
     payload = _hourly_payload(dates, by_lead)
     archive_rows = [_archive_row(d, 6.0) for d in dates]
 
@@ -103,7 +132,7 @@ def test_backfill_gives_compute_lead_bias_something_to_show_immediately():
 
 def test_backfill_is_idempotent_on_rerun():
     dates = [f"2026-06-{d:02d}" for d in range(1, 4)]
-    by_lead = {1: {d: 5.0 for d in dates}}
+    by_lead = {1: {d: _values() for d in dates}}
     payload = _hourly_payload(dates, by_lead)
     archive_rows = [_archive_row(d, 6.0) for d in dates]
 
@@ -134,7 +163,7 @@ def test_backfill_prunes_rows_older_than_keep_days():
     pliku archiwalnego - dokladnie efekt, o ktory chodzilo w zgloszeniu
     ("ustaw max CSV na ostatnie 30 dni")."""
     dates = [f"2026-06-{d:02d}" for d in range(1, 4)]
-    by_lead = {1: {d: 5.0 for d in dates}}
+    by_lead = {1: {d: _values() for d in dates}}
     payload = _hourly_payload(dates, by_lead)
     archive_rows = [_archive_row(d, 6.0) for d in dates]
 

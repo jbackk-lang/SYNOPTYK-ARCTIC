@@ -134,7 +134,7 @@ retencja).
 pytest -v
 ```
 
-Wszystkie testy przechodzą (stan na 2026-08-31: 66/66) — w tym część
+Wszystkie testy przechodzą (stan na 2026-08-31: 70/70) — w tym część
 bezpośrednio na prawdziwych odpowiedziach API z 2026-08-26
 (`test_fetch.py`), na izolowanych/tymczasowych CSV (`test_webapp.py`,
 monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`, nigdy nie dotyka prawdziwych
@@ -165,7 +165,7 @@ run_dashboard.bat        — uruchamia dashboard www
 arctic_forecast_snapshots.csv         — realne dane, ostatnie 30 dni (patrz "Retencja CSV")
 arctic_forecast_snapshots_archive.csv — starsze realne dane, nigdy nie przycinany, tworzony automatycznie
 demo_synthetic_arctic_snapshots.csv   — syntetyczne dane demo, osobno od realnych
-tests/                   — 66 testów, w tym na fixtures z prawdziwego API
+tests/                   — 70 testów, w tym na fixtures z prawdziwego API
 HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
 ```
 

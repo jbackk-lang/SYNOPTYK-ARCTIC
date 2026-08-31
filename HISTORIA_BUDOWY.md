@@ -376,6 +376,59 @@ przy okazji: `run_arctic.collect()` dostało wstrzykiwalne
 wcześniej nie dało się przetestować samej funkcji bez żywego API). 66/66
 testów przechodzi.
 
+### Backfill: dołączono wiatr i opad, nie tylko temperaturę (2026-08-31)
+
+Pytanie użytkownika po ustaleniu, że wszystkie parametry pochodzą z
+Open-Meteo (internet, nie fizyczny czujnik): skoro tak, to czy wiersze
+"prognoza" z backfillu (`backfill_real_history.py`) mogą też mieć wiatr i
+opad, nie tylko temperaturę (ograniczenie znane od Etapu 4/backtestu —
+Previous Runs API w tym module pytał dotąd wyłącznie o
+`temperature_2m_previous_dayN`).
+
+Rozwiązanie: Previous Runs API dokumentuje ten sam wzorzec nazw godzinowych
+zmiennych co zwykły `hourly=` endpoint Open-Meteo, z dopiskiem
+`_previous_dayN` — to, co już działało dla `temperature_2m`, powinno więc
+działać identycznie dla `precipitation` i `wind_speed_10m` (te same nazwy
+zmiennych, których `fetch.py`/`hourly=` endpoint już używa gdzie indziej w
+projekcie). Rozszerzono:
+
+- `previous_runs.fetch_previous_runs()`: nowy parametr `hourly_vars`
+  (domyślnie `("temperature_2m", "precipitation", "wind_speed_10m")`) —
+  pyta o wszystkie trzy zmienne × lead_days naraz.
+- `previous_runs._aggregate_by_lead()`: wydzielony wspólny rdzeń
+  (zmienna godzinowa + funkcja agregująca → dobowa wartość per lead), z
+  którego korzystają teraz zarówno stary `daily_max_by_lead()` (tylko
+  temperatura, bez zmian w zachowaniu — nadal używane przez
+  `backtest_real.py`), jak i nowy `daily_aggregates_by_lead()` (temp+opad+
+  wiatr naraz, te same definicje agregacji co `fetch.py`: max dla
+  temp/wiatru, suma dla opadu).
+- `backfill_real_history.py`: `build_prognoza_groups()`/`_forecast_record()`
+  przepisane na słownik wartości zamiast pojedynczej liczby — wypełniają
+  teraz `temp_max_c`, `precip_mm` i `wind_kmh` (nadal puste:
+  `temp_min_c`/`temp_avg_c_approx`/`pressure_hpa`, bo Previous Runs API nie
+  dostarcza min/avg ani ciśnienia w ogóle).
+
+**NIEZWERYFIKOWANE na żywej odpowiedzi API**: w przeciwieństwie do
+`temperature_2m_previous_dayN` (potwierdzone realnym zapytaniem
+2026-08-27), nazwy `precipitation_previous_dayN`/
+`wind_speed_10m_previous_dayN` są wyprowadzone przez analogię do
+udokumentowanego wzorca, nie potwierdzone jeszcze realnym payloadem —
+sandbox deweloperski nadal ma zablokowany dostęp do
+`previous-runs-api.open-meteo.com`. Kod rzuca `KeyError` jawnie, jeśli
+któregoś pola zabraknie (ten sam wzorzec co reszta projektu — nie ukrywać
+zmiany kształtu odpowiedzi API) — **pierwsze uruchomienie
+`backfill_real_history.py` po tej zmianie samo to zweryfikuje**. Jeśli
+`KeyError` wyskoczy, to sygnał do poprawienia dokładnej nazwy pola w
+`previous_runs.AGGREGATIONS`, nie błąd do zignorowania.
+
+Testy: `tests/test_previous_runs.py` (+3: `daily_aggregates_by_lead()`
+łączy trzy zmienne, rzuca `KeyError` przy brakującym polu, stary
+`daily_max_by_lead()` nadal działa mimo dodatkowych pól w payloadzie),
+`tests/test_backfill_real_history.py` (fixture i asercje przepisane na
+słownik wartości, +1 test na brakującą zmienną w jednym dniu — zostaje
+pusty string w tej jednej kolumnie, reszta wypełniona). 70/70 testów
+przechodzi.
+
 ### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
 
 Generuje w pełni sztuczne dane (`demo_synthetic_arctic_snapshots.csv`,
