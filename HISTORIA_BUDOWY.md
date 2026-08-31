@@ -376,6 +376,116 @@ przy okazji: `run_arctic.collect()` dostało wstrzykiwalne
 wcześniej nie dało się przetestować samej funkcji bez żywego API). 66/66
 testów przechodzi.
 
+### Backfill: dołączono wiatr i opad, nie tylko temperaturę (2026-08-31)
+
+Pytanie użytkownika po ustaleniu, że wszystkie parametry pochodzą z
+Open-Meteo (internet, nie fizyczny czujnik): skoro tak, to czy wiersze
+"prognoza" z backfillu (`backfill_real_history.py`) mogą też mieć wiatr i
+opad, nie tylko temperaturę (ograniczenie znane od Etapu 4/backtestu —
+Previous Runs API w tym module pytał dotąd wyłącznie o
+`temperature_2m_previous_dayN`).
+
+Rozwiązanie: Previous Runs API dokumentuje ten sam wzorzec nazw godzinowych
+zmiennych co zwykły `hourly=` endpoint Open-Meteo, z dopiskiem
+`_previous_dayN` — to, co już działało dla `temperature_2m`, powinno więc
+działać identycznie dla `precipitation` i `wind_speed_10m` (te same nazwy
+zmiennych, których `fetch.py`/`hourly=` endpoint już używa gdzie indziej w
+projekcie). Rozszerzono:
+
+- `previous_runs.fetch_previous_runs()`: nowy parametr `hourly_vars`
+  (domyślnie `("temperature_2m", "precipitation", "wind_speed_10m")`) —
+  pyta o wszystkie trzy zmienne × lead_days naraz.
+- `previous_runs._aggregate_by_lead()`: wydzielony wspólny rdzeń
+  (zmienna godzinowa + funkcja agregująca → dobowa wartość per lead), z
+  którego korzystają teraz zarówno stary `daily_max_by_lead()` (tylko
+  temperatura, bez zmian w zachowaniu — nadal używane przez
+  `backtest_real.py`), jak i nowy `daily_aggregates_by_lead()` (temp+opad+
+  wiatr naraz, te same definicje agregacji co `fetch.py`: max dla
+  temp/wiatru, suma dla opadu).
+- `backfill_real_history.py`: `build_prognoza_groups()`/`_forecast_record()`
+  przepisane na słownik wartości zamiast pojedynczej liczby — wypełniają
+  teraz `temp_max_c`, `precip_mm` i `wind_kmh` (nadal puste:
+  `temp_min_c`/`temp_avg_c_approx`/`pressure_hpa`, bo Previous Runs API nie
+  dostarcza min/avg ani ciśnienia w ogóle).
+
+**NIEZWERYFIKOWANE na żywej odpowiedzi API**: w przeciwieństwie do
+`temperature_2m_previous_dayN` (potwierdzone realnym zapytaniem
+2026-08-27), nazwy `precipitation_previous_dayN`/
+`wind_speed_10m_previous_dayN` są wyprowadzone przez analogię do
+udokumentowanego wzorca, nie potwierdzone jeszcze realnym payloadem —
+sandbox deweloperski nadal ma zablokowany dostęp do
+`previous-runs-api.open-meteo.com`. Kod rzuca `KeyError` jawnie, jeśli
+któregoś pola zabraknie (ten sam wzorzec co reszta projektu — nie ukrywać
+zmiany kształtu odpowiedzi API) — **pierwsze uruchomienie
+`backfill_real_history.py` po tej zmianie samo to zweryfikuje**. Jeśli
+`KeyError` wyskoczy, to sygnał do poprawienia dokładnej nazwy pola w
+`previous_runs.AGGREGATIONS`, nie błąd do zignorowania.
+
+Testy: `tests/test_previous_runs.py` (+3: `daily_aggregates_by_lead()`
+łączy trzy zmienne, rzuca `KeyError` przy brakującym polu, stary
+`daily_max_by_lead()` nadal działa mimo dodatkowych pól w payloadzie),
+`tests/test_backfill_real_history.py` (fixture i asercje przepisane na
+słownik wartości, +1 test na brakującą zmienną w jednym dniu — zostaje
+pusty string w tej jednej kolumnie, reszta wypełniona). 70/70 testów
+przechodzi.
+
+### Dodano kierunek wiatru — nowe pole + migracja CSV (2026-08-31)
+
+Po dołączeniu opadu i wiatru do backfillu użytkownik zapytał o kierunek
+wiatru w tabeli "Surowe odczyty" dashboardu — z prośbą o "grubą
+strzałeczkę, tak jak w zwykłym synoptyku" (Synoptyk-v2.0). W odróżnieniu
+od poprzedniej zmiany (dodanie kolumn do WIDOKU, dane już były w CSV), to
+było faktycznie nowe pole — projekt nigdy nie zbierał kierunku wiatru.
+
+**Zmiana schematu CSV** — pierwsza w tym projekcie. `wind_direction_deg`
+dodane do `snapshots.FIELDNAMES`/`retention.FIELDNAMES` (między
+`wind_kmh` a `source`) — **wymagało migracji** trzech istniejących plików
+(`arctic_forecast_snapshots.csv` — 309 wierszy prawdziwych danych,
+`arctic_forecast_snapshots_archive.csv` — 480, `demo_synthetic_arctic_snapshots.csv`
+— 726): każdy przepisany z 11- na 12-kolumnowy nagłówek, istniejące
+wiersze dostały pusty `wind_direction_deg` (nie mają tej wartości —
+zbierana od teraz, nie retrospektywnie). Bez tej migracji kolejny
+`append_snapshot()` dopisałby wiersze o innej liczbie pól niż nagłówek
+pliku — cichy, trudny do zdiagnozowania błąd struktury CSV.
+
+**Źródło danych — dwa różne poziomy zaufania**:
+- `run_arctic.py`/`fetch_archive()`/`fetch_forecast()` (`fetch.py`):
+  Open-Meteo ma bezpośrednią dobową zmienną
+  `wind_direction_10m_dominant` — serwer sam liczy poprawny "dominujący
+  kierunek", nie musimy nic agregować. Dodane do `_DAILY_FIELDS`, pole
+  OPCJONALNE (`.get()`, nie `[...]`) w `_parse_daily_response()` — jedyny
+  wyjątek od reguły "wszystkie pola wymagane na sztywno" w tym module, bo
+  dwa zapisane fixture'y (`tests/fixtures/arctic_*_result.json`, z
+  2026-08-26) legalnie go nie mają — zostały zapisane, zanim to pole
+  dołączyło do zapytania.
+- `backfill_real_history.py` (Previous Runs API): **ŚWIADOMIE NIE
+  dodane**. Kierunek wiatru to wielkość kołowa — zwykła średnia/max z
+  wartości w stopniach daje fizycznie błędny wynik blisko granicy 0/360
+  (np. średnia z 350° i 10° to 0°, nie 180° — dokładnie ten sam problem,
+  który Synoptyk-v2.0 rozwiązuje `_circular_mean_deg()`, średnią
+  wektorową). Naiwne zastosowanie tej samej agregacji co dla
+  temp/opad/wiatru (max/suma) na godzinowym sygnale z Previous Runs API
+  dawałoby błędne wyniki właśnie tam, gdzie kierunek przechodzi przez
+  północ. Zamiast zgadywać uproszczoną metodę, `wind_direction_deg`
+  zostaje pusty dla wszystkich backfillowanych wierszy "prognoza" — ten
+  sam wybór co dla `temp_min_c`/`temp_avg_c_approx`/`pressure_hpa`, które
+  Previous Runs API w ogóle nie dostarcza.
+
+**Wyświetlanie**: dashboard renderuje pojedynczą strzałkę (jedną z 8:
+↑↗→↘↓↙←↖, pokazującą DOKĄD wieje wiatr, nie skąd) — **identyczna logika
+co `gui_app.py::_WIND_ARROWS`/`_wind_arrow()` w Synoptyk-v2.0**
+(przeportowana 1:1 do JS: `deg_to = (deg_from + 180) % 360`, indeks =
+`((deg_to + 22.5) % 360) // 45`), tylko wyraźnie pogrubiona/powiększona
+(klasa `.wind-arrow`, `font-size: 18px; font-weight: 700`) na życzenie
+użytkownika ("gruba strzałeczka"). Stopnie pokazane w `title` (hover),
+jeśli ktoś chce dokładną wartość, nie tylko kierunek w przybliżeniu.
+
+Testy: `tests/test_fetch.py` (+2: fixture'y z 2026-08-26 legalnie nie
+mają pola → `None`, ręcznie zbudowany payload z polem → poprawnie
+sparsowane), `tests/test_webapp.py` (+1: strzałka i klasa CSS w
+wyrenderowanym HTML, ten sam wzorzec co test na kolumny opadu/wiatru).
+74/74 testów przechodzi.
+
 ### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
 
 Generuje w pełni sztuczne dane (`demo_synthetic_arctic_snapshots.csv`,
@@ -384,3 +494,46 @@ stacja `Longyearbyen_Svalbard_DEMO`) z zamierzonym wzorcem obciążenia
 poprawnie go odtwarza przy większej próbce (n=90 zamiast n=21 zbliża
 wynik do zamierzonych wartości). To demo MECHANIZMU, nie prognoza
 niczego o Longyearbyen — każdy wiersz i wydruk jest tagowany `[DEMO]`.
+
+## Strzałka kierunku wiatru: styl i luka po idempotentności (2026-08-31)
+
+**Styl**: użytkownik zobaczył pogrubioną/powiększoną strzałkę
+(`font-size: 18px; font-weight: 700`, patrz wyżej) na żywym dashboardzie
+i ocenił ją jako za grubą ("dashboard nie przyjmuje tej formy"). Wraca
+do zwykłego stylu tekstu tabeli, zostawiając tylko `color: var(--accent)`
+do odróżnienia od reszty kolumn. Sam znak i logika wyboru strzałki
+(`_wind_arrow`/`windArrow`) bez zmian — to czysto kosmetyczna korekta.
+
+**Luka danych, zgłoszona zaraz potem**: po zmianie stylu użytkownik
+zauważył, że kolumna "kier." nadal pokazuje same "—" mimo kliknięcia
+"Pobierz nowe dane teraz". Przyczyna: `wind_direction_10m_dominant`
+dołączyło do `_DAILY_FIELDS` w `fetch.py` tego samego dnia
+(2026-08-31), ale `append_snapshot()` jest idempotentne po kluczu
+`(station, target_date, issue_date, source)` — wiersze na dziś zostały
+zapisane (przez wcześniejsze uruchomienia tego samego dnia, sprzed
+zmiany) PRZED dodaniem pola, więc klucz już istniał i kolejne pobrania
+z tym samym `issue_date` były po prostu pomijane jako duplikaty — razem
+z ich (teraz dostępnym) kierunkiem wiatru. Bez naprawy kolumna
+zostałaby pusta aż do jutra (nowy `issue_date` = nowy klucz).
+
+Naprawa w `snapshots.py::append_snapshot()`: gdy klucz już istnieje w
+CSV, ale jego `wind_direction_deg` jest puste, a nowo pobrany rekord
+faktycznie ma tę wartość — dopisujemy ją do ISTNIEJĄCEGO wiersza
+zamiast pomijać go w ciszy (funkcja przeszła z trybu "append-only" na
+"czytaj cały CSV, uzupełnij/dopisz, zapisz cały plik" — bezpieczne przy
+30-dniowej retencji, plik jest mały). Uzupełnianie działa tylko w jedną
+stronę (nigdy nie nadpisuje już zapisanej realnej wartości nową) i nie
+wlicza się do zwracanego `n` nowych wierszy — to nie jest nowy wiersz,
+tylko domknięcie starego. Ten sam mechanizm samoczynnie naprawi
+analogiczną lukę dla każdego przyszłego "miękkiego" pola dodanego w
+środku dnia zbierania.
+
+Testy (+2, `tests/test_snapshots.py`): uzupełnienie pustego pola na
+istniejącym kluczu bez duplikowania wiersza, oraz dowód że realna
+wartość nigdy nie jest nadpisywana kolejnym pobraniem. 76/76 testów
+przechodzi.
+
+**Do zrobienia lokalnie**: to wymaga jeszcze jednego uruchomienia
+`python run_arctic.py` albo kliknięcia "Pobierz nowe dane teraz" na
+prawdziwym API (sandbox nie ma dostępu do `api.open-meteo.com`) — dopiero
+wtedy dzisiejsze wiersze faktycznie dostaną kierunek wiatru.

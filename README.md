@@ -134,7 +134,7 @@ retencja).
 pytest -v
 ```
 
-Wszystkie testy przechodzą (stan na 2026-08-31: 66/66) — w tym część
+Wszystkie testy przechodzą (stan na 2026-08-31: 74/74) — w tym część
 bezpośrednio na prawdziwych odpowiedziach API z 2026-08-26
 (`test_fetch.py`), na izolowanych/tymczasowych CSV (`test_webapp.py`,
 monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`, nigdy nie dotyka prawdziwych
@@ -165,7 +165,7 @@ run_dashboard.bat        — uruchamia dashboard www
 arctic_forecast_snapshots.csv         — realne dane, ostatnie 30 dni (patrz "Retencja CSV")
 arctic_forecast_snapshots_archive.csv — starsze realne dane, nigdy nie przycinany, tworzony automatycznie
 demo_synthetic_arctic_snapshots.csv   — syntetyczne dane demo, osobno od realnych
-tests/                   — 66 testów, w tym na fixtures z prawdziwego API
+tests/                   — 74 testy, w tym na fixtures z prawdziwego API
 HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
 ```
 
@@ -185,5 +185,18 @@ HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
   (retencja, patrz wyżej) — pełna historia jest w
   `arctic_forecast_snapshots_archive.csv`, ale `compute_lead_bias()`/
   dashboard go nie czytają, tylko plik "gorący".
+- `wind_direction_deg` (kierunek wiatru) jest ZAWSZE pusty w wierszach
+  "prognoza" dopisanych przez `backfill_real_history.py` — to wielkość
+  kołowa (średnia z 350° i 10° to fizycznie 0°, nie 180°), a Previous Runs
+  API dostarcza tylko surowy sygnał godzinowy, więc świadomie nie
+  próbujemy go tu agregować samodzielnie. Wypełniony jest normalnie dla
+  wierszy z `run_arctic.py` i archiwum — tam Open-Meteo sam liczy
+  dominujący kierunek dobowy poprawną metodą, po swojej stronie.
+- Wiersze zapisane PRZED dodaniem `wind_direction_deg` do `fetch.py`
+  (2026-08-31) mają to pole trwale puste w dashboardzie, dopóki nie
+  klikniesz jeszcze raz "▶ Pobierz nowe dane teraz" (albo nie odpali się
+  `run_arctic.py`) — `append_snapshot()` przy tym samym kluczu
+  uzupełnia brakujące pole w miejscu, zamiast czekać na jutrzejszy
+  `issue_date` (patrz `HISTORIA_BUDOWY.md`).
 
 Szczegóły i uzasadnienia każdego z powyższych: [`HISTORIA_BUDOWY.md`](HISTORIA_BUDOWY.md).

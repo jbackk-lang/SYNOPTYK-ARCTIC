@@ -24,12 +24,18 @@ dziś na żywo" od "dociągnięte z historii". Idempotentny klucz
 `append_snapshot()` nadal chroni przed duplikatami, gdyby backfill
 uruchomiono więcej niż raz albo obok już działającego `run_arctic.py`.
 
-Ograniczenie: Previous Runs API (`previous_runs.py`) pyta tylko o
-temperaturę (`temperature_2m_previous_dayN`) — backfillowane wiersze
-"prognoza" mają wypełnione WYŁĄCZNIE `temp_max_c` (min/avg/precip/
-pressure/wind zostają puste, tak jak w każdym innym niekompletnym wierszu
-w tym CSV). Wiersze "archiwum_openmeteo" mają komplet pól — `fetch_archive()`
-zwraca wszystko.
+Ograniczenie: `previous_runs.daily_aggregates_by_lead()` wypełnia
+`temp_max_c`, `precip_mm` i `wind_kmh` (patrz `previous_runs.AGGREGATIONS`)
+— `temp_min_c`/`temp_avg_c_approx`/`pressure_hpa` zostają puste, bo Previous
+Runs API nie dostarcza min/avg ani ciśnienia, tylko to, co da się policzyć
+z godzinowego maksimum/sumy (tak jak w każdym innym niekompletnym wierszu
+w tym CSV). Wiersze "archiwum_openmeteo" mają komplet pól —
+`fetch_archive()` zwraca wszystko. UWAGA: nazwy pól opadu/wiatru
+(`precipitation_previous_dayN`/`wind_speed_10m_previous_dayN`) nie są
+jeszcze zweryfikowane na żywej odpowiedzi API (patrz `previous_runs.py`,
+sekcja "ROZSZERZENIE") — pierwsze uruchomienie po tej zmianie to
+zweryfikuje; `KeyError` oznacza, że trzeba poprawić nazwę pola, nie że coś
+jest nie tak z resztą backfillu.
 
 RETENCJA: po zapisie CSV jest przycinany do ostatnich `keep_days` dni
 (domyślnie 30, patrz `arctic_synoptyk/retention.py` — nic nie kasuje
@@ -53,7 +59,7 @@ from typing import Any, Callable
 
 from arctic_synoptyk.station import ArcticStation, LONGYEARBYEN
 from arctic_synoptyk.fetch import fetch_archive
-from arctic_synoptyk.previous_runs import fetch_previous_runs, daily_max_by_lead, MAX_LEAD_DAYS
+from arctic_synoptyk.previous_runs import fetch_previous_runs, daily_aggregates_by_lead, MAX_LEAD_DAYS
 from arctic_synoptyk.snapshots import append_snapshot
 from arctic_synoptyk.retention import prune_old_rows, DEFAULT_KEEP_DAYS
 
@@ -61,23 +67,37 @@ CSV_PATH = "arctic_forecast_snapshots.csv"
 DEFAULT_PAST_DAYS = DEFAULT_KEEP_DAYS  # 30 - patrz "RETENCJA" wyzej
 
 
-def _forecast_record(target_date_str: str, temp_max: float) -> dict[str, Any]:
-    """Rekord w kształcie oczekiwanym przez append_snapshot() - tylko
-    temp_max_c wypełnione, reszta pusta (patrz zastrzeżenie w docstringu
-    modułu o zakresie pól Previous Runs API)."""
+def _forecast_record(target_date_str: str, values: dict[str, Any]) -> dict[str, Any]:
+    """Rekord w kształcie oczekiwanym przez append_snapshot(). `values` to
+    słownik z kluczami spośród temp_max_c/precip_mm/wind_kmh (patrz
+    `previous_runs.AGGREGATIONS`) - brakujący klucz (np. luka w danych
+    źródłowych dla tego konkretnego dnia) zostaje pusty, tak jak każdy inny
+    niekompletny wiersz w tym CSV. temp_min_c/temp_avg_c_approx/pressure_hpa
+    ZAWSZE puste - Previous Runs API nie dostarcza min/avg ani ciśnienia
+    (patrz zastrzeżenie w docstringu modułu)."""
     return {
         "date": target_date_str,
         "temp_min_c": "",
         "temp_avg_c_approx": "",
-        "temp_max_c": temp_max,
-        "precip_mm": "",
+        "temp_max_c": values.get("temp_max_c", ""),
+        "precip_mm": values.get("precip_mm", ""),
         "pressure_hpa": "",
-        "wind_kmh": "",
+        "wind_kmh": values.get("wind_kmh", ""),
+        # ZAWSZE puste, celowo - kierunek wiatru to wielkosc kolowa (srednia
+        # z 350 i 10 stopni to fizycznie 0, nie 180, patrz Synoptyk-v2.0
+        # gui_app.py::_circular_mean_deg). Agregowanie go z godzinowego
+        # sygnalu Previous Runs API tak samo prosto jak temp/opad/wiatr
+        # (max/suma) dawaloby BLEDNE wyniki w pobliskiu granicy 0/360 -
+        # swiadomie tego nie robimy, zamiast zgadywac. wind_direction_deg
+        # jest za to wypelniane normalnie dla wierszy z run_arctic.py i
+        # archiwum (patrz fetch.py) - tam Open-Meteo sam liczy dominujacy
+        # kierunek dobowy poprawna metoda, po swojej stronie.
+        "wind_direction_deg": "",
     }
 
 
-def build_prognoza_groups(by_lead: dict[int, dict[str, float]]) -> dict[date, list[dict]]:
-    """Czysta funkcja: wyjście daily_max_by_lead() -> {issue_date: [rekordy]}
+def build_prognoza_groups(by_lead: dict[int, dict[str, dict[str, float]]]) -> dict[date, list[dict]]:
+    """Czysta funkcja: wyjście daily_aggregates_by_lead() -> {issue_date: [rekordy]}
     gotowe do append_snapshot() (jedno wywołanie na issue_date, bo
     append_snapshot przyjmuje jeden issue_date na cały pull). Wydzielona z
     backfill(), żeby dało się przetestować samą logikę grupowania/przesunięcia
@@ -88,10 +108,10 @@ def build_prognoza_groups(by_lead: dict[int, dict[str, float]]) -> dict[date, li
     Previous Runs API faktycznie zwróciło tę wartość."""
     groups: dict[date, list[dict]] = defaultdict(list)
     for lead, by_date in by_lead.items():
-        for target_date_str, temp_max in by_date.items():
+        for target_date_str, values in by_date.items():
             target = datetime.strptime(target_date_str, "%Y-%m-%d").date()
             issue = target - timedelta(days=lead)
-            groups[issue].append(_forecast_record(target_date_str, temp_max))
+            groups[issue].append(_forecast_record(target_date_str, values))
     return groups
 
 
@@ -109,12 +129,13 @@ def backfill(
     testów (ten sam wzorzec co `run_arctic.collect()` - jedno miejsce z
     logiką, używane zarówno przez CLI (`main()`) jak i przez testy z
     podstawionym fetcherem, bez duplikowania kroku zapisu do CSV).
-    `max_lead_days` przekazywane wprost do daily_max_by_lead() - głównie
-    do testów, żeby fixture nie musiał udawać wszystkich 7 pól lead_days
-    naraz (patrz test_backfill_real_history.py). Po zapisie przycina CSV
-    do ostatnich `keep_days` dni (patrz "RETENCJA" w docstringu modułu)."""
+    `max_lead_days` przekazywane wprost do daily_aggregates_by_lead() -
+    głównie do testów, żeby fixture nie musiał udawać wszystkich 7 pól
+    lead_days naraz (patrz test_backfill_real_history.py). Po zapisie
+    przycina CSV do ostatnich `keep_days` dni (patrz "RETENCJA" w
+    docstringu modułu)."""
     payload = _fetch_previous_runs(station, past_days=past_days)
-    by_lead = daily_max_by_lead(payload, max_lead_days=max_lead_days)
+    by_lead = daily_aggregates_by_lead(payload, max_lead_days=max_lead_days)
 
     archive_rows = _fetch_archive(station, past_days=past_days, exclude_trailing_days=2)
 
