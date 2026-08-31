@@ -1,7 +1,15 @@
 # SYNOPTYK-ARCTIC
 
-Wersja Synoptyka dla stacji arktycznej/zdalnej (Longyearbyen, Svalbard —
-lat 78.2232, lon 15.6267). Cztery gotowe, przetestowane elementy:
+Wersja Synoptyka dla stacji arktycznych/zdalnych — **10 stacji**
+(przełącznik w dashboardzie, pogrupowany na Północ/Południe): 6 stacji
+arktycznych (Longyearbyen, Ny-Ålesund i Polska Stacja Polarna Hornsund na
+Svalbardzie, Alert w Kanadzie, Utqiagvik na Alasce, Tiksi w Rosji) +
+**4 stacje antarktyczne** (Polska Stacja Antarktyczna im. Henryka
+Arctowskiego, McMurdo, Amundsen-Scott na biegunie południowym, Wostok) —
+patrz "Wiele stacji" niżej po szczegóły i uzasadnienie tego wyjątku od
+nazwy projektu. Domyślna stacja: **Hornsund** (Polska Stacja Polarna).
+Wszystkie współrzędne w `arctic_synoptyk/station.py`. Cztery gotowe,
+przetestowane elementy:
 
 1. **Zbieranie danych + pomiar trafności** — codzienny kolektor
    (`run_arctic.py`) loguje prognozę i archiwum Open-Meteo do CSV, licząc
@@ -101,11 +109,66 @@ to, co już jest na dysku.
 
 | endpoint | zwraca |
 |---|---|
+| `GET /api/stations` | lista wszystkich stacji (nazwa + współrzędne + półkula), plus już pogrupowane `north`/`south` do dropdowna |
 | `GET /api/status` | metadane stacji + liczba dni + poziom świeżości |
 | `GET /api/real_bias` | oficjalny bias/MAE (>=5 par) + surowe liczniki n |
 | `GET /api/demo_bias` | bias/MAE na danych syntetycznych + disclaimer |
 | `GET /api/latest_readings` | ostatnie N surowych, niesparowanych wierszy z CSV — widoczność że kolektor pisze dane, niezależnie od progu `min_samples` |
-| `POST /api/collect` | uruchamia realne pobranie z Open-Meteo i dopisanie do CSV, zwraca to, co zebrało (albo `forecast_error`/`archive_error`, jeśli sieć zawiodła) |
+| `POST /api/collect` | uruchamia realne pobranie z Open-Meteo dla jednej stacji i dopisanie do CSV, zwraca to, co zebrało (albo `forecast_error`/`archive_error`, jeśli sieć zawiodła) |
+
+`/api/status`, `/api/real_bias`, `/api/latest_readings`, `POST /api/collect`
+przyjmują opcjonalny `?station=<nazwa>` (patrz "Wiele stacji" niżej) —
+brak parametru = domyślnie Longyearbyen, nieznana nazwa = HTTP 404
+(jawny błąd, nie cichy fallback).
+
+## Wiele stacji
+
+Dashboard ma przełącznik (dropdown, dwie grupy: 🧭 Północ / 🧊 Południe)
+między **10 stacjami**, wszystkie na **wspólnym**
+`arctic_forecast_snapshots.csv` (rozróżnione kolumną `station` —
+`snapshots.py`/`bias.py` filtrowały po niej od początku, więc dodanie
+kolejnych stacji nie wymagało zmiany schematu). Domyślna: **Hornsund**
+(`DEFAULT_STATION` w `webapp/app.py`).
+
+### Północ (Arktyka)
+
+| stacja (nazwa w CSV) | lokalizacja | uwaga |
+|---|---|---|
+| `Hornsund_Polska_Stacja_Polarna` | Svalbard, Norwegia | **domyślna** — Polska Stacja Polarna (IGF PAN) |
+| `Longyearbyen_Svalbard` | Svalbard, Norwegia | jedyna zweryfikowana na żywym fetchu (patrz "Znane ograniczenia") |
+| `Ny_Alesund_Svalbard` | Svalbard, Norwegia | najdalej na północ wysunięta stała osada badawcza świata |
+| `Alert_Nunavut_Kanada` | Wyspa Ellesmere'a, Kanada | najdalej na północ wysunięta stale zamieszkana osada świata (82°N) |
+| `Utqiagvik_Alaska` | Alaska, USA | stacja klimatyczna NOAA |
+| `Tiksi_Rosja` | Jakucja, Rosja | Morze Łaptiewów |
+
+### Południe (Antarktyda) ⚠️
+
+| stacja (nazwa w CSV) | lokalizacja | uwaga |
+|---|---|---|
+| `Arctowski_Antarktyda` | Wyspa Króla Jerzego | Polska Stacja Antarktyczna im. Henryka Arctowskiego |
+| `McMurdo_Antarktyda` | Wyspa Rossa | największa stacja badawcza na Antarktydzie (USAP) |
+| `Amundsen_Scott_Biegun_Poludniowy` | biegun południowy (90°S) | długość geograficzna umownie 0°E — nieokreślona matematycznie w tym punkcie |
+| `Wostok_Antarktyda` | wnętrze Antarktydy Wschodniej | najniższa zarejestrowana temperatura na Ziemi (-89.2°C, 1983) |
+
+**`python run_arctic.py`** i **`python backfill_real_history.py`** zbierają
+teraz WSZYSTKIE 10 stacji jednym uruchomieniem (`run_arctic.collect_all()`/
+pętla w `backfill_real_history.main()`) — nie trzeba mnożyć zaplanowanych
+zadań per stacja. Błąd sieci dla jednej stacji nie przerywa reszty.
+`POST /api/collect` w dashboardzie działa na jednej, aktualnie wybranej w
+dropdownie stacji (szybciej niż czekać na 10 zapytań do Open-Meteo na
+jedno kliknięcie).
+
+**4 stacje antarktyczne, nie Arktyka** — świadomy wyjątek od nazwy
+projektu, dodany na wyraźną prośbę użytkownika (Arctowski jako druga,
+obok Hornsund, polska całoroczna stacja polarna; potem dołożone McMurdo/
+Amundsen-Scott/Wostok po pytaniu "czy są inne stacje oprócz
+arctowskiego"). Sezony są tam odwrócone (antarktyczne lato =
+grudzień-luty) — "noc polarna listopad-luty" niżej w "Znanych
+ograniczeniach" dotyczy WYŁĄCZNIE stacji na półkuli północnej. Dashboard
+pokazuje jawne ostrzeżenie pod nagłówkiem, gdy jakakolwiek stacja
+południowa jest wybrana (liczone z `ArcticStation.hemisphere`, nie z
+dopasowania nazwy — dotyczy więc też Amundsen-Scott, mimo że w jej
+nazwie nie ma słowa "Antarktyda").
 
 ## Backtest historyczny (bez zapisu do CSV)
 
@@ -134,7 +197,7 @@ retencja).
 pytest -v
 ```
 
-Wszystkie testy przechodzą (stan na 2026-08-31: 74/74) — w tym część
+Wszystkie testy przechodzą (stan na 2026-08-31: 88/88) — w tym część
 bezpośrednio na prawdziwych odpowiedziach API z 2026-08-26
 (`test_fetch.py`), na izolowanych/tymczasowych CSV (`test_webapp.py`,
 monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`, nigdy nie dotyka prawdziwych
@@ -144,7 +207,7 @@ plików w repo).
 
 ```
 arctic_synoptyk/
-    station.py          — ArcticStation (bez UHI, bez cichego fallbacku)
+    station.py          — ArcticStation (bez UHI, bez cichego fallbacku) + STATIONS/STATIONS_BY_NAME/STATIONS_NORTH/STATIONS_SOUTH (10 stacji, patrz "Wiele stacji")
     fetch.py             — pobieranie z Open-Meteo (daily=), parsowanie odpowiedzi
     snapshots.py         — logowanie do CSV (idempotentne)
     bias.py              — bias/MAE per lead_days
@@ -178,7 +241,16 @@ HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
   dobowa (Open-Meteo agreguje dobowo po swojej stronie, bez godzinowego
   sygnału) — traktować jako przybliżenie.
 - Zachowanie w okresie nocy polarnej (listopad–luty) nie sprawdzone —
-  dotychczasowe dane pokrywają tylko letnie okno.
+  dotychczasowe dane pokrywają tylko letnie okno. Dotyczy WYŁĄCZNIE
+  stacji na półkuli północnej (6 z 7) — dla `Arctowski_Antarktyda` pory
+  roku są odwrócone (antarktyczne lato = grudzień-luty), patrz "Wiele
+  stacji" wyżej.
+- Współrzędne/wysokości nowych stacji (wszystkie poza Longyearbyen) NIE
+  są jeszcze zweryfikowane na żywym zapytaniu do Open-Meteo (`grid_lat`/
+  `grid_lon`/`grid_elevation_m` w `station.py` puste) — tylko z publicznych
+  źródeł (Wikipedia/NOAA/strony instytucji). Pierwszy realny fetch dla
+  każdej z nich to zweryfikuje (patrz komentarz przy LONGYEARBYEN, ten sam
+  wzorzec przyciągania do punktu siatki).
 - Brak integracji z fizycznym sprzętem satelitarnym (Iridium/Argos) —
   `connectivity_sim.py` tylko symuluje harmonogram połączeń.
 - `arctic_forecast_snapshots.csv` pokazuje tylko ostatnie 30 dni

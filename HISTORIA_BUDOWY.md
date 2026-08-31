@@ -537,3 +537,125 @@ przechodzi.
 `python run_arctic.py` albo kliknięcia "Pobierz nowe dane teraz" na
 prawdziwym API (sandbox nie ma dostępu do `api.open-meteo.com`) — dopiero
 wtedy dzisiejsze wiersze faktycznie dostaną kierunek wiatru.
+
+**Efekt uboczny naprawy**: proces uvicorn trzeba było zrestartować, żeby
+podjął nowy kod (`fetch.py`/`snapshots.py` w pamięci procesu nie
+przeładowują się same) — po restarcie kierunek zaczął się faktycznie
+pokazywać. Użytkownik poprosił wtedy o powrót do pogrubionej strzałki
+(bez zwiększania rozmiaru tym razem, żeby nie powtórzyć poprzedniego
+"za grubo") - `.wind-arrow { font-weight: 700 }`, bez zmiany rozmiaru.
+
+## Wiele stacji: 6 nowych + przełącznik w dashboardzie (2026-08-31)
+
+Użytkownik poprosił o "stacje arktyczne 3-5 najważniejszych", potem
+doprecyzował: koniecznie Polska Stacja Polarna Hornsund ("i polska na
+wyspie"), a w kolejnej turze wybrał WSZYSTKIE 4 zaproponowane kandydatury
+(Ny-Ålesund, Alert, Utqiagvik, Tiksi) plus dorzucił przez pole "Other"
+"Polska arctowski" — czyli Polską Stację Antarktyczną im. Henryka
+Arctowskiego, potwierdzoną linkiem do arctowski.aq. Finalnie: **7 stacji**
+łącznie z Longyearbyen, nie 3-5 — świadome rozszerzenie zakresu przez
+użytkownika w trakcie rozmowy, nie błąd interpretacji.
+
+**Współrzędne/wysokości** zweryfikowane wyszukiwaniem (Wikipedia, NOAA
+GML, strona IGF PAN, arctowski.aq) 2026-08-31 — NIE pomiarem w tym repo,
+w odróżnieniu od `LONGYEARBYEN.grid_lat`/`grid_lon`/`grid_elevation_m`
+(te trzy pola u nowych stacji zostają `None`, dopóki nie padnie pierwszy
+żywy fetch — patrz "Znane ograniczenia" w README).
+
+**Arctowski = Antarktyda, nie Arktyka**: świadomie zaakceptowany wyjątek
+od nazwy projektu ("SYNOPTYK-ARCTIC"), NIE pomyłka nazewnicza — druga
+(obok Hornsund) polska całoroczna stacja polarna, więc naturalnie pasuje
+do zestawienia "polskie stacje polarne" mimo złamania założenia "tylko
+Arktyka". Konsekwencje odnotowane w dwóch miejscach: (1) nazwa stacji w
+kodzie/CSV/dashboardzie to dosłownie `Arctowski_Antarktyda` (nie sam
+"Arctowski") - fakt widoczny wszędzie, gdzie nazwa się pojawia, bez
+potrzeby czytania komentarza w kodzie; (2) dashboard pokazuje jawne
+ostrzeżenie pod nagłówkiem, gdy ta stacja jest wybrana ("PÓŁKULA
+POŁUDNIOWA — pory roku odwrócone"), bo "noc polarna listopad-luty" z
+README/`Znane ograniczenia` dotyczy wyłącznie półkuli północnej i byłaby
+myląca zastosowana tu wprost.
+
+**Architektura — jedna zmiana wystarczyła w rdzeniu**: `snapshots.py`
+(`append_snapshot`) i `bias.py` (`compute_lead_bias`) od SAMEGO POCZĄTKU
+przyjmowały `station_name` jako parametr i filtrowały po kolumnie
+`station` w CSV — więc wiele stacji na jednym, wspólnym pliku CSV
+zadziałało bez zmiany schematu ani żadnej z tych dwóch funkcji. Realna
+praca: `station.py` (nowe stałe `ArcticStation` + `STATIONS`/
+`STATIONS_BY_NAME`), `run_arctic.py` (`collect_all()` — pętla po
+`STATIONS`, wspólny CSV, `main()` drukuje wynik per stacja),
+`backfill_real_history.py` (`main()` analogicznie zapętlony, błąd sieci
+dla jednej stacji nie przerywa reszty — ważne dla Arctowskiego, inny
+region/serwer Open-Meteo niż reszta), `webapp/app.py` (`GET /api/stations`
++ `?station=` na czterech pozostałych endpointach, `_resolve_station()`
+zwraca HTTP 404 na nieznaną nazwę zamiast cichego fallbacku — ten sam
+duch co brak fallbacku w `station.py` dla nieznanej nazwy stacji),
+`index.html` (dropdown w nagłówku, `currentStation` + `_withStation()`
+dokleja `?station=` do wywołań status/real_bias/latest_readings/collect;
+`/api/demo_bias` CELOWO bez tego parametru — demo to zawsze jedna, stała
+stacja syntetyczna, niezależna od wyboru na dashboardzie).
+
+**Wsteczna zgodność**: brak `?station=` = domyślnie Longyearbyen
+(`DEFAULT_STATION`) na wszystkich endpointach — dokładnie po to, żeby
+`tests/test_webapp.py` sprzed tej zmiany (odpytujące endpointy bez
+parametru) przeszły bez modyfikacji. `POST /api/collect` przestał zawsze
+wołać `LONGYEARBYEN` na sztywno — teraz zbiera dla stacji z `?station=`
+(albo domyślnej), JEDNEJ na kliknięcie (nie wszystkich 7 naraz — zbieranie
+wszystkiego naraz robi `run_arctic.py`/`collect_all()`, osobno).
+
+Testy (+12): `test_station.py` (rejestr 7 stacji, unikalność nazw,
+Arctowski jako jedyny wyjątek `lat<0`), `test_run_arctic.py`
+(`collect_all()` na wspólnym CSV, domyślnie cały `STATIONS`),
+`test_webapp.py` (`/api/stations`, filtrowanie `?station=`, 404 na
+nieznaną nazwę, `/api/collect` na wybranej stacji, nie zawsze
+Longyearbyen). 88/88 testów przechodzi.
+
+## Jeszcze 3 stacje antarktyczne + grupowanie Północ/Południe + domyślna Hornsund (2026-08-31)
+
+Po zgłoszeniu "dane archiwalne się nie ładują bo druga półkula?" dla
+Arctowskiego — zdiagnozowane jako fałszywy trop: Open-Meteo Archive API
+nie ma ograniczenia półkulowego, prawdziwa przyczyna to zwykły brak
+zebranych jeszcze danych dla nowo dodanej stacji (backfill trzeba było
+uruchomić ponownie po dodaniu stacji do rejestru) — nie osobny bug per
+półkula. Przy okazji użytkownik zapytał, czy są inne uznane stacje
+antarktyczne poza Arctowskim — tak, dołożone 3: **McMurdo** (USA,
+największa stacja na Antarktydzie), **Amundsen-Scott** (USA, dokładnie na
+biegunie południowym — długość geograficzna tam matematycznie
+nieokreślona, przyjęto konwencjonalne 0°E), **Wostok** (Rosja, miejsce
+najniższej zarejestrowanej temperatury na Ziemi, -89.2°C).
+
+**Grupowanie Północ/Południe**: `ArcticStation` dostał `@property
+hemisphere` liczone WPROST ze znaku `lat` (nie osobne, ręcznie wpisywane
+pole — jedno źródło prawdy, nie da się rozjechać przy kolejnej stacji).
+`STATIONS_NORTH`/`STATIONS_SOUTH` w `station.py` to filtrowanie po tej
+property. `GET /api/stations` zwraca teraz `north`/`south` obok pełnej
+`stations` — dashboard buduje z nich dwa `<optgroup>` (🧭 Północ / 🧊
+Południe) zamiast liczyć grupowanie samodzielnie w JS. Ostrzeżenie o
+odwróconych porach roku na dashboardzie (dodane przy Arctowskim) zostało
+poprawione — sprawdzało wcześniej `nazwa.includes("Antarktyda")`, co
+pomijałoby Amundsen-Scott (`Amundsen_Scott_Biegun_Poludniowy`, bez tego
+słowa w nazwie); teraz sprawdza `hemisphere === "S"` z `/api/status`,
+więc działa dla KAŻDEJ stacji południowej, nie tylko tych z konkretnym
+słowem w nazwie.
+
+**Domyślna stacja zmieniona na Hornsund** (użytkownik: "ustaw polska jako
+domyślna") — spośród dwóch polskich stacji wybrany Hornsund (Arktyka), nie
+Arctowski (Antarktyda): lepiej pasuje do nazwy/tematu projektu
+(SYNOPTYK-ARCTIC) i to on padł jako pierwszy w rozmowie o polskich
+stacjach ("i polska na wyspie", zanim doszło do Arctowskiego). Jeśli to
+zła interpretacja "polska" (dwie stacje kwalifikują się), łatwo zmienić
+`DEFAULT_STATION` w `webapp/app.py` na `ARCTOWSKI.name`.
+
+**Testy przepisane pod nową wartość domyślną**: testy w `test_webapp.py`,
+które wcześniej polegały na tym, że brak `?station=` trafia w
+Longyearbyen (bo to była wtedy wartość domyślna), teraz albo (a) jawnie
+doklejają `?station=Longyearbyen_Svalbard`, gdy chodzi im o "jakąś
+konkretną stację, wszystko jedno którą" — żeby nie rozjeżdżały się przy
+KOLEJNEJ zmianie domyślnej, albo (b) sprawdzają wprost przeciw nowej
+stałej `DEFAULT_STATION = "Hornsund_Polska_Stacja_Polarna"`, gdy
+PRZEDMIOTEM testu jest sama wartość domyślna (`test_status_no_data_yet`,
+`test_status_filters_by_station_param`, `test_stations_endpoint_lists_full_registry`).
+
+Testy (+3 netto, kilka przepisanych): rejestr rozszerzony do 10 stacji
+(6 północ / 4 południe), `hemisphere` per stacja, `/api/stations` zwraca
+poprawnie pogrupowane `north`/`south`, nowa wartość `DEFAULT_STATION`.
+88/88 przechodzi.

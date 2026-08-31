@@ -57,7 +57,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta
 from typing import Any, Callable
 
-from arctic_synoptyk.station import ArcticStation, LONGYEARBYEN
+from arctic_synoptyk.station import ArcticStation, LONGYEARBYEN, STATIONS
 from arctic_synoptyk.fetch import fetch_archive
 from arctic_synoptyk.previous_runs import fetch_previous_runs, daily_aggregates_by_lead, MAX_LEAD_DAYS
 from arctic_synoptyk.snapshots import append_snapshot
@@ -161,33 +161,44 @@ def backfill(
 
 
 def main() -> int:
+    """Backfilluje WSZYSTKIE stacje z `STATIONS` (dodane 2026-08-31 - patrz
+    `arctic_synoptyk/station.py`), po kolei, do WSPÓLNEGO CSV - ten sam
+    powód i wzorzec co `run_arctic.collect_all()`: jedno uruchomienie ma
+    dać dashboardowi natychmiastowy wynik dla każdej stacji z dropdowna,
+    nie tylko Longyearbyen. Błąd sieci dla JEDNEJ stacji (np. Arctowski,
+    Antarktyda - inny serwer/region Open-Meteo) NIE przerywa reszty -
+    drukowany i pomijany, kolejne stacje idą dalej."""
     past_days = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PAST_DAYS
     keep_days = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_KEEP_DAYS
-    station = LONGYEARBYEN
 
-    print(f"=== Backfill realnej historii do {CSV_PATH}, {station.name}, "
+    print(f"=== Backfill realnej historii do {CSV_PATH}, {len(STATIONS)} stacji, "
           f"{past_days} dni historii, retencja {keep_days} dni ===\n")
     if past_days > keep_days:
         print(f"UWAGA: past_days ({past_days}) > keep_days ({keep_days}) - "
               f"wiekszosc dopisanych par zostanie od razu przycieta do pliku "
               f"archiwalnego (patrz docstring modulu, sekcja RETENCJA).\n")
-    print("[1/2] Pobieram Previous Runs API + Archive API...")
-    try:
-        result = backfill(CSV_PATH, station, past_days=past_days, keep_days=keep_days)
-    except Exception as e:
-        print(f"BLAD pobierania/zapisu: {e}")
-        return 1
 
-    print(f"[2/2] Dopisano {result['n_forecast_added']} wierszy prognozy "
-          f"(w {result['n_issue_dates']} grupach issue_date) + "
-          f"{result['n_archive_added']} wierszy archiwum "
-          f"(pominięto już istniejące — klucz idempotentności).")
-    if result["n_pruned"]:
-        print(f"          przeniesiono {result['n_pruned']} wierszy starszych niz "
-              f"{keep_days} dni do pliku archiwalnego (nic nie skasowano).")
-    print("\nSprawdź teraz `pytest -v` i dashboard (/api/real_bias) — powinny "
-          "pokazać wynik od razu, bez czekania na kolejne dni run_arctic.py.")
-    return 0
+    any_failed = False
+    for i, station in enumerate(STATIONS, start=1):
+        print(f"[{i}/{len(STATIONS)}] {station.name}: pobieram Previous Runs API + Archive API...")
+        try:
+            result = backfill(CSV_PATH, station, past_days=past_days, keep_days=keep_days)
+        except Exception as e:
+            print(f"          BLAD pobierania/zapisu dla {station.name}: {e} (pomijam, ide dalej)")
+            any_failed = True
+            continue
+
+        print(f"          dopisano {result['n_forecast_added']} wierszy prognozy "
+              f"(w {result['n_issue_dates']} grupach issue_date) + "
+              f"{result['n_archive_added']} wierszy archiwum "
+              f"(pominięto już istniejące — klucz idempotentności).")
+        if result["n_pruned"]:
+            print(f"          przeniesiono {result['n_pruned']} wierszy starszych niz "
+                  f"{keep_days} dni do pliku archiwalnego (nic nie skasowano).")
+
+    print("\nSprawdź teraz `pytest -v` i dashboard (/api/real_bias, przełącznik stacji) — "
+          "powinny pokazać wynik od razu dla każdej stacji, bez czekania na kolejne dni run_arctic.py.")
+    return 1 if any_failed else 0
 
 
 if __name__ == "__main__":

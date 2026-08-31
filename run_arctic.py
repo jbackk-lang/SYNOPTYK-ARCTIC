@@ -1,7 +1,11 @@
 """
 run_arctic.py — codzienny runner do uruchamiania NA LAPTOPIE (nie w
 sandboksie Claude, patrz README) - pobiera prognozę i archiwum dla
-Longyearbyen, loguje do CSV, i pokazuje aktualny status korekty obciążenia
+WSZYSTKICH stacji z `arctic_synoptyk.station.STATIONS` (patrz
+"Wiele stacji" niżej), loguje do WSPÓLNEGO CSV (kolumna `station`
+rozróżnia wiersze - `bias.py`/`snapshots.py` już filtrowały po niej od
+początku, więc dodanie kolejnych stacji nie wymagało zmian w tych
+modułach), i pokazuje aktualny status korekty obciążenia per stacja
 (pusty, dopóki nie zbierze się min_samples par na dany lead_days).
 
 Uzycie (z folderu SYNOPTYK-ARCTIC):
@@ -11,12 +15,21 @@ Uruchamiaj raz dziennie (np. jako zaplanowane zadanie), zeby CSV
 naprawde naros3 do punktu, w ktorym compute_lead_bias() zacznie cos
 zwracac - analogicznie do krakow_forecast_snapshots.csv, ktore potrzebowalo
 tygodni regularnych uruchomien, zeby dojsc do 1236 par.
-"""
+
+## Wiele stacji (dodane 2026-08-31)
+
+Pierwotnie ten moduł obsługiwał tylko Longyearbyen - `collect()` (funkcja
+dla JEDNEJ stacji, współdzielona z `POST /api/collect` w dashboardzie,
+gdzie użytkownik wybiera stację z listy) zostaje BEZ ZMIAN. Nowe:
+`collect_all()` woła `collect()` w pętli po `STATIONS` - to jest ścieżka,
+której używa `main()`/`run.bat`/zaplanowane zadanie, żeby JEDNO codzienne
+uruchomienie zebrało dane dla wszystkich stacji naraz, bez konieczności
+mnożenia zaplanowanych zadań per stacja."""
 import sys
 from datetime import date
 from typing import Callable
 
-from arctic_synoptyk.station import LONGYEARBYEN
+from arctic_synoptyk.station import LONGYEARBYEN, STATIONS
 from arctic_synoptyk.fetch import fetch_forecast, fetch_archive
 from arctic_synoptyk.snapshots import append_snapshot
 from arctic_synoptyk.bias import compute_lead_bias
@@ -89,8 +102,35 @@ def collect(
     }
 
 
-def main():
-    result = collect()
+def collect_all(
+    csv_path: str = CSV_PATH,
+    stations: list = STATIONS,
+    keep_days: int = DEFAULT_KEEP_DAYS,
+    _fetch_forecast: Callable = fetch_forecast,
+    _fetch_archive: Callable = fetch_archive,
+) -> list[dict]:
+    """collect() dla KAZDEJ stacji z `stations`, po kolei, do WSPOLNEGO
+    `csv_path` - patrz "Wiele stacji" w docstringu modulu. Zwraca liste
+    wynikow (jeden dict na stacje, ten sam ksztalt co collect()), zeby
+    main() mogl wypisac raport per stacja.
+
+    `prune_old_rows()` (wewnatrz kazdego collect()) jest wolane raz na
+    stacje - troche nadmiarowe (caly plik czytany/zapisywany N razy przy
+    N stacjach), ale CSV jest maly (retencja 30 dni) i nie warto tu
+    optymalizowac kosztem prostoty."""
+    return [
+        collect(
+            csv_path=csv_path,
+            station=station,
+            keep_days=keep_days,
+            _fetch_forecast=_fetch_forecast,
+            _fetch_archive=_fetch_archive,
+        )
+        for station in stations
+    ]
+
+
+def _print_result(result: dict) -> None:
     today, station_name = result["date"], result["station"]
 
     if result["forecast_error"]:
@@ -122,6 +162,14 @@ def main():
             print("Jeszcze zero sparowanych dni (prognoza vs. pozniejsze archiwum "
                   "dla tej samej daty) - normalne w pierwszych ~2 dniach zbierania, "
                   "patrz README ('dlaczego archiwum wyklucza ostatnie 2 dni').")
+
+
+def main():
+    results = collect_all()
+    for i, result in enumerate(results):
+        if i > 0:
+            print()
+        _print_result(result)
 
 
 if __name__ == "__main__":
