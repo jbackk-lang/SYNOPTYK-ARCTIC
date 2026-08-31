@@ -429,6 +429,63 @@ słownik wartości, +1 test na brakującą zmienną w jednym dniu — zostaje
 pusty string w tej jednej kolumnie, reszta wypełniona). 70/70 testów
 przechodzi.
 
+### Dodano kierunek wiatru — nowe pole + migracja CSV (2026-08-31)
+
+Po dołączeniu opadu i wiatru do backfillu użytkownik zapytał o kierunek
+wiatru w tabeli "Surowe odczyty" dashboardu — z prośbą o "grubą
+strzałeczkę, tak jak w zwykłym synoptyku" (Synoptyk-v2.0). W odróżnieniu
+od poprzedniej zmiany (dodanie kolumn do WIDOKU, dane już były w CSV), to
+było faktycznie nowe pole — projekt nigdy nie zbierał kierunku wiatru.
+
+**Zmiana schematu CSV** — pierwsza w tym projekcie. `wind_direction_deg`
+dodane do `snapshots.FIELDNAMES`/`retention.FIELDNAMES` (między
+`wind_kmh` a `source`) — **wymagało migracji** trzech istniejących plików
+(`arctic_forecast_snapshots.csv` — 309 wierszy prawdziwych danych,
+`arctic_forecast_snapshots_archive.csv` — 480, `demo_synthetic_arctic_snapshots.csv`
+— 726): każdy przepisany z 11- na 12-kolumnowy nagłówek, istniejące
+wiersze dostały pusty `wind_direction_deg` (nie mają tej wartości —
+zbierana od teraz, nie retrospektywnie). Bez tej migracji kolejny
+`append_snapshot()` dopisałby wiersze o innej liczbie pól niż nagłówek
+pliku — cichy, trudny do zdiagnozowania błąd struktury CSV.
+
+**Źródło danych — dwa różne poziomy zaufania**:
+- `run_arctic.py`/`fetch_archive()`/`fetch_forecast()` (`fetch.py`):
+  Open-Meteo ma bezpośrednią dobową zmienną
+  `wind_direction_10m_dominant` — serwer sam liczy poprawny "dominujący
+  kierunek", nie musimy nic agregować. Dodane do `_DAILY_FIELDS`, pole
+  OPCJONALNE (`.get()`, nie `[...]`) w `_parse_daily_response()` — jedyny
+  wyjątek od reguły "wszystkie pola wymagane na sztywno" w tym module, bo
+  dwa zapisane fixture'y (`tests/fixtures/arctic_*_result.json`, z
+  2026-08-26) legalnie go nie mają — zostały zapisane, zanim to pole
+  dołączyło do zapytania.
+- `backfill_real_history.py` (Previous Runs API): **ŚWIADOMIE NIE
+  dodane**. Kierunek wiatru to wielkość kołowa — zwykła średnia/max z
+  wartości w stopniach daje fizycznie błędny wynik blisko granicy 0/360
+  (np. średnia z 350° i 10° to 0°, nie 180° — dokładnie ten sam problem,
+  który Synoptyk-v2.0 rozwiązuje `_circular_mean_deg()`, średnią
+  wektorową). Naiwne zastosowanie tej samej agregacji co dla
+  temp/opad/wiatru (max/suma) na godzinowym sygnale z Previous Runs API
+  dawałoby błędne wyniki właśnie tam, gdzie kierunek przechodzi przez
+  północ. Zamiast zgadywać uproszczoną metodę, `wind_direction_deg`
+  zostaje pusty dla wszystkich backfillowanych wierszy "prognoza" — ten
+  sam wybór co dla `temp_min_c`/`temp_avg_c_approx`/`pressure_hpa`, które
+  Previous Runs API w ogóle nie dostarcza.
+
+**Wyświetlanie**: dashboard renderuje pojedynczą strzałkę (jedną z 8:
+↑↗→↘↓↙←↖, pokazującą DOKĄD wieje wiatr, nie skąd) — **identyczna logika
+co `gui_app.py::_WIND_ARROWS`/`_wind_arrow()` w Synoptyk-v2.0**
+(przeportowana 1:1 do JS: `deg_to = (deg_from + 180) % 360`, indeks =
+`((deg_to + 22.5) % 360) // 45`), tylko wyraźnie pogrubiona/powiększona
+(klasa `.wind-arrow`, `font-size: 18px; font-weight: 700`) na życzenie
+użytkownika ("gruba strzałeczka"). Stopnie pokazane w `title` (hover),
+jeśli ktoś chce dokładną wartość, nie tylko kierunek w przybliżeniu.
+
+Testy: `tests/test_fetch.py` (+2: fixture'y z 2026-08-26 legalnie nie
+mają pola → `None`, ręcznie zbudowany payload z polem → poprawnie
+sparsowane), `tests/test_webapp.py` (+1: strzałka i klasa CSS w
+wyrenderowanym HTML, ten sam wzorzec co test na kolumny opadu/wiatru).
+74/74 testów przechodzi.
+
 ### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
 
 Generuje w pełni sztuczne dane (`demo_synthetic_arctic_snapshots.csv`,

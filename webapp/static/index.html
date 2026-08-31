@@ -62,6 +62,10 @@
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--panel-border); }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: normal; }
+  /* "gruba strzalka" kierunku wiatru - ten sam pojedynczy znak co
+     Synoptyk-v2.0 (WIND_ARROWS), tylko wyraznie wiekszy/pogrubiony, zeby
+     dalo sie go odczytac na pierwszy rzut oka w waskiej komorce tabeli. */
+  .wind-arrow { font-size: 18px; font-weight: 700; color: var(--accent); }
   canvas { max-height: 260px; }
   #refresh-btn, #collect-btn {
     background: var(--accent-dim);
@@ -110,7 +114,7 @@
 <div class="panel" style="margin-bottom:20px;">
   <h2>Surowe odczyty — czy kolektor w ogóle działa?</h2>
   <div class="empty-note">Każdy wiersz to jeden zapis do CSV (prognoza albo pobranie z archiwum) - widoczny od razu, niezależnie od tego, czy uzbierało się już >= min_samples par do tabeli trafności poniżej. Jeśli tu coś jest, pipeline żyje.</div>
-  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>opad mm</th><th>wiatr km/h</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
+  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>opad mm</th><th>wiatr km/h</th><th>kier.</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
 </div>
 
 <div class="panel" style="margin-bottom:20px;">
@@ -139,6 +143,22 @@ async function getJSON(url) {
   return r.json();
 }
 
+// 8 kierunkow, strzalka pokazuje DOKAD wieje wiatr (nie skad - to
+// odwrotnosc meteorologicznego "kierunku" 0-360, ktory podaje ZRODLO
+// wiatru) - DOKLADNIE ten sam wzorzec co Synoptyk-v2.0
+// (gui_app.py::_WIND_ARROWS/_wind_arrow), zeby obie appki czytaly sie tak
+// samo.
+const WIND_ARROWS = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"];
+
+function windArrow(degFrom) {
+  if (degFrom === null || degFrom === undefined || degFrom === "" || Number.isNaN(Number(degFrom))) {
+    return "—";
+  }
+  const degTo = (Number(degFrom) + 180) % 360;
+  const idx = Math.floor(((degTo + 22.5) % 360) / 45);
+  return WIND_ARROWS[idx];
+}
+
 function renderStatus(s) {
   const el = document.getElementById("status-body");
   const staleBadge = s.staleness_label_pl
@@ -159,18 +179,21 @@ function renderLatestReadings(data) {
   const tbody = document.querySelector("#readings-table tbody");
   tbody.innerHTML = "";
   if (!data.rows || data.rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="8" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
     return;
   }
   data.rows.forEach(row => {
     const tr = document.createElement("tr");
     const srcLabel = row.source === "prognoza" ? "📡 prognoza" : "📚 archiwum";
-    // precip_mm/wind_kmh: puste string dla wierszy prognozy z backfillu, gdy
-    // Previous Runs API nie zwrocilo danego pola dla tego dnia (patrz
-    // HISTORIA_BUDOWY.md) - traktowane tak samo jak brak danych, nie "0".
+    // precip_mm/wind_kmh/wind_direction_deg: puste string dla wierszy
+    // prognozy z backfillu, gdy Previous Runs API nie zwrocilo danego pola
+    // dla tego dnia (kierunek jest tam ZAWSZE pusty, celowo - patrz
+    // backfill_real_history.py::_forecast_record) - traktowane tak samo
+    // jak brak danych, nie "0".
     const precip = (row.precip_mm ?? "") === "" ? "—" : row.precip_mm;
     const wind = (row.wind_kmh ?? "") === "" ? "—" : row.wind_kmh;
-    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${precip}</td><td>${wind}</td><td>${row.pressure_hpa ?? "—"}</td>`;
+    const arrow = windArrow(row.wind_direction_deg);
+    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${precip}</td><td>${wind}</td><td class="wind-arrow" title="${row.wind_direction_deg ?? ""}°">${arrow}</td><td>${row.pressure_hpa ?? "—"}</td>`;
     tbody.appendChild(tr);
   });
 }

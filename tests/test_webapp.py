@@ -247,6 +247,20 @@ def test_index_page_shows_precip_and_wind_columns_in_readings_table():
     assert "row.wind_kmh" in r.text
 
 
+def test_index_page_shows_wind_direction_arrow():
+    """Zgloszenie: 'nie ma wiatru kierunku' + 'strzaleczka gruba, tak jak w
+    zwyklym synoptyku' - ten sam zestaw 8 strzalek/logika co
+    Synoptyk-v2.0 (gui_app.py::_WIND_ARROWS/_wind_arrow), wyrenderowana
+    pogrubiona (klasa .wind-arrow)."""
+    client = TestClient(app_module.app)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "kier." in r.text
+    assert "windArrow" in r.text
+    assert "↑" in r.text and "↗" in r.text and "↖" in r.text  # sam zestaw co Krakow
+    assert ".wind-arrow" in r.text
+
+
 def test_vendored_chartjs_is_served():
     client = TestClient(app_module.app)
     r = client.get("/static/vendor/chart.umd.js")

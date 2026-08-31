@@ -28,7 +28,7 @@ from typing import Any, Iterable
 FIELDNAMES = [
     "station", "target_date", "issue_date", "lead_days",
     "temp_min_c", "temp_avg_c_approx", "temp_max_c",
-    "precip_mm", "pressure_hpa", "wind_kmh", "source",
+    "precip_mm", "pressure_hpa", "wind_kmh", "wind_direction_deg", "source",
 ]
 
 
@@ -95,6 +95,15 @@ def append_snapshot(
                 "precip_mm": rec["precip_mm"],
                 "pressure_hpa": rec["pressure_hpa"],
                 "wind_kmh": rec["wind_kmh"],
+                # .get(): dodane 2026-08-31, PO tym jak demo_synthetic_fill.py
+                # i backfill_real_history.py zaczely wywolywac append_snapshot()
+                # z rekordami bez tego klucza w ogole (demo go nie generuje,
+                # Previous Runs API nie dostarcza kierunku w bezpieczny,
+                # niekolowy sposob - patrz backfill_real_history.py) - bez
+                # .get() te wywolania rzucalyby KeyError zamiast po prostu
+                # zostawic puste pole, jak kazdy inny brakujacy parametr w
+                # tym CSV.
+                "wind_direction_deg": rec.get("wind_direction_deg", ""),
                 "source": source,
             })
             existing.add(key)

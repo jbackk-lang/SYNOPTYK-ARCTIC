@@ -61,15 +61,18 @@ def test_build_prognoza_groups_computes_issue_date_from_lead():
     # lead=3, target=06-10 -> issue=06-07 (jedyny wpis w tej grupie)
     assert groups[date(2026, 6, 7)] == [
         {"date": "2026-06-10", "temp_min_c": "", "temp_avg_c_approx": "",
-         "temp_max_c": 4.0, "precip_mm": 0.0, "pressure_hpa": "", "wind_kmh": 8.0}
+         "temp_max_c": 4.0, "precip_mm": 0.0, "pressure_hpa": "", "wind_kmh": 8.0,
+         "wind_direction_deg": ""}
     ]
     # lead=1, target=06-10 -> issue=06-09 ; lead=3, target=06-12 -> issue=06-09
     # (ta sama grupa, dwa rozne (lead, target) daja ten sam issue_date)
     assert groups[date(2026, 6, 9)] == [
         {"date": "2026-06-10", "temp_min_c": "", "temp_avg_c_approx": "",
-         "temp_max_c": 5.0, "precip_mm": 1.2, "pressure_hpa": "", "wind_kmh": 10.0},
+         "temp_max_c": 5.0, "precip_mm": 1.2, "pressure_hpa": "", "wind_kmh": 10.0,
+         "wind_direction_deg": ""},
         {"date": "2026-06-12", "temp_min_c": "", "temp_avg_c_approx": "",
-         "temp_max_c": 6.0, "precip_mm": 2.5, "pressure_hpa": "", "wind_kmh": 12.0},
+         "temp_max_c": 6.0, "precip_mm": 2.5, "pressure_hpa": "", "wind_kmh": 12.0,
+         "wind_direction_deg": ""},
     ]
 
 

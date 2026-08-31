@@ -83,6 +83,16 @@ def _forecast_record(target_date_str: str, values: dict[str, Any]) -> dict[str, 
         "precip_mm": values.get("precip_mm", ""),
         "pressure_hpa": "",
         "wind_kmh": values.get("wind_kmh", ""),
+        # ZAWSZE puste, celowo - kierunek wiatru to wielkosc kolowa (srednia
+        # z 350 i 10 stopni to fizycznie 0, nie 180, patrz Synoptyk-v2.0
+        # gui_app.py::_circular_mean_deg). Agregowanie go z godzinowego
+        # sygnalu Previous Runs API tak samo prosto jak temp/opad/wiatr
+        # (max/suma) dawaloby BLEDNE wyniki w pobliskiu granicy 0/360 -
+        # swiadomie tego nie robimy, zamiast zgadywac. wind_direction_deg
+        # jest za to wypelniane normalnie dla wierszy z run_arctic.py i
+        # archiwum (patrz fetch.py) - tam Open-Meteo sam liczy dominujacy
+        # kierunek dobowy poprawna metoda, po swojej stronie.
+        "wind_direction_deg": "",
     }
 
 
