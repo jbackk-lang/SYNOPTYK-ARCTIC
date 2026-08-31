@@ -317,6 +317,65 @@ cel modułu: jedno wywołanie `backfill()` z 7-dniową próbką daje
 dni codziennego zbierania), plus test idempotencji (drugie uruchomienie
 nie duplikuje wierszy). 55/55 testów przechodzi.
 
+### Retencja CSV: przycinanie do ostatnich 30 dni (2026-08-31)
+
+Po dodaniu `backfill_real_history.py` pytanie użytkownika: skoro CSV
+rośnie bezterminowo (codzienne `run_arctic.py` + jednorazowy backfill do
+90 dni wstecz), czy nie ustawić mu maksymalnego rozmiaru — "ostatnich 30
+dni spokojnie wystarczy do prognozy".
+
+Zweryfikowano matematycznie: `compute_lead_bias()` wymaga >= `min_samples`
+(5) sparowanych dni PER `lead_days` (max lead=7). Para dla danego
+`lead_days` pojawia się, gdy jej `target_date` ma już >= `lead_days + 2`
+dni (odcięcie niesfinalizowanego archiwum). Najdłuższy lead (7) potrzebuje
+więc danych sprzed 9 dni — 30-dniowe okno kroczące to ponad 3x zapas.
+Potwierdzenie: 30 dni to dokładnie ta sama wartość co
+`_CSV_RETENTION_DAYS` już używana w Synoptyk-v2.0
+(`gui_app.py::_prune_old_csv_rows`) — nie nowy pomysł, sprawdzony wzorzec.
+
+Implementacja (`arctic_synoptyk/retention.py::prune_old_rows()`) skopiowana
+z tego samego wzorca co Krakowa: NIC nie kasuje bezpowrotnie — wiersze
+starsze niż `keep_days` (po `target_date`) są NAJPIERW dopisywane do
+`arctic_forecast_snapshots_archive.csv` (ten sam układ kolumn, nigdy nie
+przycinany), dopiero potem usuwane z pliku gorącego. Różnica względem
+Krakowa: tam implementacja używa pandas (`gui_app.py` i tak go importuje);
+tu w SYNOPTYK-ARCTIC nie ma pandas w zależnościach (`requirements.txt`:
+tylko requests/pytest/fastapi/uvicorn/httpx) — `retention.py` jest więc
+napisane na czystym `csv`/stdlib, żeby nie dociągać nowej zależności dla
+jednej funkcji.
+
+**Świadoma decyzja o zakresie**: `prune_old_rows()` NIE jest wpięte do
+`snapshots.append_snapshot()` (współdzielonej z `demo_synthetic_fill.py`),
+tylko wywoływane jawnie z `run_arctic.collect()` i
+`backfill_real_history.backfill()` — obie operują na realnym CSV. Powód:
+dane demo mają STAŁE, zmyślone daty (start 2026-08-01, niezależne od
+prawdziwego "dziś") specjalnie po to, żeby zawsze dawać tę samą, pełną
+próbkę (`n_days` argumentu skryptu) do zademonstrowania mechanizmu.
+Gdyby retencja działała uniwersalnie w `append_snapshot()`, uruchomienie
+`demo_synthetic_fill.py 90` po prostu przycięłoby prawie całą wygenerowaną
+próbkę przy najbliższym wywołaniu (2026-08-01 jest dawno starszy niż 30
+dni od prawdziwego "dziś"), psując sens demo — złapane PRZED
+zaimplementowaniem, nie jako bug naprawiony po fakcie.
+
+**Efekt uboczny na `backfill_real_history.py`**: skoro CSV i tak jest
+przycinany do 30 dni, nie ma sensu domyślnie pobierać 90 dni historii —
+`DEFAULT_PAST_DAYS` zmienione z 90 na 30 (`= DEFAULT_KEEP_DAYS`,
+zaimportowane wprost z `retention.py`, żeby nie rozjechały się przy
+przyszłej zmianie). CLI przyjmuje teraz dwa opcjonalne argumenty
+(`[liczba_dni] [keep_days]`), żeby świadomie można było pobrać/zatrzymać
+dłuższe okno naraz, zamiast pobierać dane, które i tak natychmiast trafią
+do archiwum.
+
+Testy: `tests/test_retention.py` (przenoszenie do archiwum, no-op gdy nic
+starego, zachowanie wierszy z niesparsowalną datą, dopisywanie do
+istniejącego archiwum bez duplikowania nagłówka, zgodność `FIELDNAMES` z
+`snapshots.py`), plus po jednym teście wiążącym w
+`test_backfill_real_history.py` i nowym `test_run_arctic.py` (ten drugi
+przy okazji: `run_arctic.collect()` dostało wstrzykiwalne
+`_fetch_forecast`/`_fetch_archive`, tym samym wzorcem co `backfill()` —
+wcześniej nie dało się przetestować samej funkcji bez żywego API). 66/66
+testów przechodzi.
+
 ### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
 
 Generuje w pełni sztuczne dane (`demo_synthetic_arctic_snapshots.csv`,

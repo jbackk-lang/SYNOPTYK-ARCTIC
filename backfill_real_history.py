@@ -31,9 +31,18 @@ pressure/wind zostają puste, tak jak w każdym innym niekompletnym wierszu
 w tym CSV). Wiersze "archiwum_openmeteo" mają komplet pól — `fetch_archive()`
 zwraca wszystko.
 
+RETENCJA: po zapisie CSV jest przycinany do ostatnich `keep_days` dni
+(domyślnie 30, patrz `arctic_synoptyk/retention.py` — nic nie kasuje
+bezpowrotnie, stare wiersze idą do pliku archiwalnego). Stąd domyślne
+`past_days=30` TUTAJ, nie 90 — nie ma sensu pobierać dalszej historii,
+skoro i tak zostanie od razu przycięta. Podaj większe `past_days` tylko
+razem z większym `keep_days` (patrz `main()`/CLI), jeśli świadomie chcesz
+trzymać dłuższe okno.
+
 Użycie:
-    python backfill_real_history.py [liczba_dni]
-    python backfill_real_history.py 90        # domyślnie
+    python backfill_real_history.py [liczba_dni] [keep_days]
+    python backfill_real_history.py            # domyślnie 30 dni historii, retencja 30 dni
+    python backfill_real_history.py 90 90       # świadomie dłuższe okno obu naraz
 """
 from __future__ import annotations
 
@@ -46,9 +55,10 @@ from arctic_synoptyk.station import ArcticStation, LONGYEARBYEN
 from arctic_synoptyk.fetch import fetch_archive
 from arctic_synoptyk.previous_runs import fetch_previous_runs, daily_max_by_lead, MAX_LEAD_DAYS
 from arctic_synoptyk.snapshots import append_snapshot
+from arctic_synoptyk.retention import prune_old_rows, DEFAULT_KEEP_DAYS
 
 CSV_PATH = "arctic_forecast_snapshots.csv"
-DEFAULT_PAST_DAYS = 90
+DEFAULT_PAST_DAYS = DEFAULT_KEEP_DAYS  # 30 - patrz "RETENCJA" wyzej
 
 
 def _forecast_record(target_date_str: str, temp_max: float) -> dict[str, Any]:
@@ -90,6 +100,7 @@ def backfill(
     station: ArcticStation,
     past_days: int = DEFAULT_PAST_DAYS,
     max_lead_days: int = MAX_LEAD_DAYS,
+    keep_days: int = DEFAULT_KEEP_DAYS,
     _fetch_previous_runs: Callable = fetch_previous_runs,
     _fetch_archive: Callable = fetch_archive,
 ) -> dict[str, Any]:
@@ -100,7 +111,8 @@ def backfill(
     podstawionym fetcherem, bez duplikowania kroku zapisu do CSV).
     `max_lead_days` przekazywane wprost do daily_max_by_lead() - głównie
     do testów, żeby fixture nie musiał udawać wszystkich 7 pól lead_days
-    naraz (patrz test_backfill_real_history.py)."""
+    naraz (patrz test_backfill_real_history.py). Po zapisie przycina CSV
+    do ostatnich `keep_days` dni (patrz "RETENCJA" w docstringu modułu)."""
     payload = _fetch_previous_runs(station, past_days=past_days)
     by_lead = daily_max_by_lead(payload, max_lead_days=max_lead_days)
 
@@ -117,21 +129,30 @@ def backfill(
     for issue, records in groups.items():
         n_fc += append_snapshot(csv_path, station.name, records, issue_date=issue, source="prognoza")
 
+    n_pruned = prune_old_rows(csv_path, keep_days=keep_days)
+
     return {
         "n_forecast_added": n_fc,
         "n_archive_added": n_arch,
         "n_issue_dates": len(groups),
+        "n_pruned": n_pruned,
     }
 
 
 def main() -> int:
     past_days = int(sys.argv[1]) if len(sys.argv) > 1 else DEFAULT_PAST_DAYS
+    keep_days = int(sys.argv[2]) if len(sys.argv) > 2 else DEFAULT_KEEP_DAYS
     station = LONGYEARBYEN
 
-    print(f"=== Backfill realnej historii do {CSV_PATH}, {station.name}, {past_days} dni ===\n")
+    print(f"=== Backfill realnej historii do {CSV_PATH}, {station.name}, "
+          f"{past_days} dni historii, retencja {keep_days} dni ===\n")
+    if past_days > keep_days:
+        print(f"UWAGA: past_days ({past_days}) > keep_days ({keep_days}) - "
+              f"wiekszosc dopisanych par zostanie od razu przycieta do pliku "
+              f"archiwalnego (patrz docstring modulu, sekcja RETENCJA).\n")
     print("[1/2] Pobieram Previous Runs API + Archive API...")
     try:
-        result = backfill(CSV_PATH, station, past_days=past_days)
+        result = backfill(CSV_PATH, station, past_days=past_days, keep_days=keep_days)
     except Exception as e:
         print(f"BLAD pobierania/zapisu: {e}")
         return 1
@@ -140,6 +161,9 @@ def main() -> int:
           f"(w {result['n_issue_dates']} grupach issue_date) + "
           f"{result['n_archive_added']} wierszy archiwum "
           f"(pominięto już istniejące — klucz idempotentności).")
+    if result["n_pruned"]:
+        print(f"          przeniesiono {result['n_pruned']} wierszy starszych niz "
+              f"{keep_days} dni do pliku archiwalnego (nic nie skasowano).")
     print("\nSprawdź teraz `pytest -v` i dashboard (/api/real_bias) — powinny "
           "pokazać wynik od razu, bez czekania na kolejne dni run_arctic.py.")
     return 0
