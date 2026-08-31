@@ -110,7 +110,7 @@
 <div class="panel" style="margin-bottom:20px;">
   <h2>Surowe odczyty — czy kolektor w ogóle działa?</h2>
   <div class="empty-note">Każdy wiersz to jeden zapis do CSV (prognoza albo pobranie z archiwum) - widoczny od razu, niezależnie od tego, czy uzbierało się już >= min_samples par do tabeli trafności poniżej. Jeśli tu coś jest, pipeline żyje.</div>
-  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
+  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>opad mm</th><th>wiatr km/h</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
 </div>
 
 <div class="panel" style="margin-bottom:20px;">
@@ -159,13 +159,18 @@ function renderLatestReadings(data) {
   const tbody = document.querySelector("#readings-table tbody");
   tbody.innerHTML = "";
   if (!data.rows || data.rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
     return;
   }
   data.rows.forEach(row => {
     const tr = document.createElement("tr");
     const srcLabel = row.source === "prognoza" ? "📡 prognoza" : "📚 archiwum";
-    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${row.pressure_hpa ?? "—"}</td>`;
+    // precip_mm/wind_kmh: puste string dla wierszy prognozy z backfillu, gdy
+    // Previous Runs API nie zwrocilo danego pola dla tego dnia (patrz
+    // HISTORIA_BUDOWY.md) - traktowane tak samo jak brak danych, nie "0".
+    const precip = (row.precip_mm ?? "") === "" ? "—" : row.precip_mm;
+    const wind = (row.wind_kmh ?? "") === "" ? "—" : row.wind_kmh;
+    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${precip}</td><td>${wind}</td><td>${row.pressure_hpa ?? "—"}</td>`;
     tbody.appendChild(tr);
   });
 }

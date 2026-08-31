@@ -234,6 +234,19 @@ def test_index_page_does_not_reference_external_cdn():
     assert '<script src="/static/vendor/chart.umd.js"></script>' in r.text
 
 
+def test_index_page_shows_precip_and_wind_columns_in_readings_table():
+    """Regression: tabela 'Surowe odczyty' pokazywala tylko temp_max i
+    cisnienie, mimo ze precip_mm/wind_kmh sa juz w /api/latest_readings -
+    zgloszenie uzytkownika ('nie ma wiatru... ani opadow')."""
+    client = TestClient(app_module.app)
+    r = client.get("/")
+    assert r.status_code == 200
+    assert "opad mm" in r.text
+    assert "wiatr km/h" in r.text
+    assert "row.precip_mm" in r.text
+    assert "row.wind_kmh" in r.text
+
+
 def test_vendored_chartjs_is_served():
     client = TestClient(app_module.app)
     r = client.get("/static/vendor/chart.umd.js")
