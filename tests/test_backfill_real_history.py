@@ -85,7 +85,11 @@ def test_backfill_gives_compute_lead_bias_something_to_show_immediately():
 
     with tempfile.TemporaryDirectory() as d:
         csv_path = os.path.join(d, "test.csv")
-        result = backfill(csv_path, STATION, past_days=7, max_lead_days=1,
+        # keep_days=99999: fixture uzywa dat z czerwca 2026, dawno starszych
+        # niz domyslna 30-dniowa retencja wzgledem PRAWDZIWEGO "dzisiaj" -
+        # ten test sprawdza sam mechanizm backfillu, nie retencje (ktora ma
+        # wlasny test nizej), wiec wylaczamy przycinanie.
+        result = backfill(csv_path, STATION, past_days=7, max_lead_days=1, keep_days=99999,
                            _fetch_previous_runs=fake_previous_runs,
                            _fetch_archive=fake_archive)
         assert result["n_forecast_added"] == 7
@@ -111,13 +115,44 @@ def test_backfill_is_idempotent_on_rerun():
 
     with tempfile.TemporaryDirectory() as d:
         csv_path = os.path.join(d, "test.csv")
-        first = backfill(csv_path, STATION, past_days=3, max_lead_days=1,
+        first = backfill(csv_path, STATION, past_days=3, max_lead_days=1, keep_days=99999,
                           _fetch_previous_runs=fake_previous_runs,
                           _fetch_archive=fake_archive)
-        second = backfill(csv_path, STATION, past_days=3, max_lead_days=1,
+        second = backfill(csv_path, STATION, past_days=3, max_lead_days=1, keep_days=99999,
                            _fetch_previous_runs=fake_previous_runs,
                            _fetch_archive=fake_archive)
         assert first["n_forecast_added"] == 3
         assert first["n_archive_added"] == 3
         assert second["n_forecast_added"] == 0
         assert second["n_archive_added"] == 0
+
+
+def test_backfill_prunes_rows_older_than_keep_days():
+    """Wiazanie z retention.py: backfill() z dawna historia (fixture z
+    czerwca 2026, prawdziwe "dzisiaj" to sierpien/pozniej) i domyslnym
+    keep_days=30 powinien od razu przyciac swiezo dopisane wiersze do
+    pliku archiwalnego - dokladnie efekt, o ktory chodzilo w zgloszeniu
+    ("ustaw max CSV na ostatnie 30 dni")."""
+    dates = [f"2026-06-{d:02d}" for d in range(1, 4)]
+    by_lead = {1: {d: 5.0 for d in dates}}
+    payload = _hourly_payload(dates, by_lead)
+    archive_rows = [_archive_row(d, 6.0) for d in dates]
+
+    def fake_previous_runs(station, past_days):
+        return payload
+
+    def fake_archive(station, past_days, exclude_trailing_days):
+        return archive_rows
+
+    with tempfile.TemporaryDirectory() as d:
+        csv_path = os.path.join(d, "test.csv")
+        result = backfill(csv_path, STATION, past_days=3, max_lead_days=1,
+                           _fetch_previous_runs=fake_previous_runs,
+                           _fetch_archive=fake_archive)
+        # default keep_days=30; fixture dates sa relatywnie do prawdziwego
+        # "dzisiaj" znacznie starsze niz 30 dni (ten plik testowy powstal
+        # 2026-08-31) - wiec wszystko, co przed chwila dopisano, powinno
+        # zostac natychmiast przeniesione do archiwum.
+        assert result["n_pruned"] == result["n_forecast_added"] + result["n_archive_added"]
+        assert result["n_pruned"] > 0
+        assert not os.path.exists(csv_path) or open(csv_path).read().count("\n") <= 1
