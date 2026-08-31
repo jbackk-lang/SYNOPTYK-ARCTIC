@@ -19,6 +19,14 @@ from webapp import app as app_module
 
 STATION = "Longyearbyen_Svalbard"
 DEMO_STATION = "Longyearbyen_Svalbard_DEMO"
+# Domyslna stacja bez ?station= (dodane 2026-08-31: Hornsund/Polska stala
+# sie domyslna zamiast Longyearbyen, na wyrazna prosbe uzytkownika - patrz
+# HISTORIA_BUDOWY.md). Testy PONIZEJ, ktore testuja "jakas stacja, wszystko
+# jedno ktora" jawnie doklejaja `?station={STATION}` zamiast polegac na
+# tym, co akurat jest domyslne - zeby nie rozjezdzaly sie przy kolejnej
+# zmianie domyslnej stacji. Testy, ktorych PRZEDMIOTEM jest sama wartosc
+# domyslna, uzywaja tej stalej wprost.
+DEFAULT_STATION = "Hornsund_Polska_Stacja_Polarna"
 
 
 def _forecast_row(target_date, temp_max):
@@ -47,7 +55,7 @@ def test_status_no_data_yet():
             r = client.get("/api/status")
             assert r.status_code == 200
             body = r.json()
-            assert body["station"] == STATION
+            assert body["station"] == DEFAULT_STATION
             assert body["n_rows_real"] == 0
             assert body["last_issue_date"] is None
             assert body["staleness"] is None
@@ -65,7 +73,7 @@ def test_status_reports_staleness_from_last_issue_date():
         app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
         try:
             client = TestClient(app_module.app)
-            body = client.get("/api/status").json()
+            body = client.get(f"/api/status?station={STATION}").json()
             assert body["n_rows_real"] == 1
             assert body["last_issue_date"] == old_dt.date().isoformat()
             # 10 dni wieku -> pasmo STALE (3-14 dni), patrz offline.py
@@ -85,7 +93,7 @@ def test_real_bias_empty_when_below_min_samples():
         app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
         try:
             client = TestClient(app_module.app)
-            body = client.get("/api/real_bias").json()
+            body = client.get(f"/api/real_bias?station={STATION}").json()
             assert body["official"] == {}, "n=1 < min_samples=5, wiec zero oficjalnych wynikow"
             assert body["raw_counts"].get("1") == 1 or body["raw_counts"].get(1) == 1
         finally:
@@ -105,7 +113,7 @@ def test_real_bias_populates_after_enough_samples():
         app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
         try:
             client = TestClient(app_module.app)
-            body = client.get("/api/real_bias").json()
+            body = client.get(f"/api/real_bias?station={STATION}").json()
             assert "1" in body["official"]
             assert body["official"]["1"]["n"] == 6
             assert body["official"]["1"]["bias"] == 1.0
@@ -175,7 +183,7 @@ def test_latest_readings_shows_rows_even_when_unpaired():
         app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
         try:
             client = TestClient(app_module.app)
-            body = client.get("/api/latest_readings").json()
+            body = client.get(f"/api/latest_readings?station={STATION}").json()
             assert body["n_total"] == 1
             assert len(body["rows"]) == 1
             row = body["rows"][0]
@@ -184,7 +192,7 @@ def test_latest_readings_shows_rows_even_when_unpaired():
             assert float(row["temp_max_c"]) == 3.8
             # a real_bias na tych samych danych jest pusty - potwierdza ze to
             # dwa rozne widoki tego samego CSV, nie duplikat tej samej logiki
-            rb = client.get("/api/real_bias").json()
+            rb = client.get(f"/api/real_bias?station={STATION}").json()
             assert rb["official"] == {}
         finally:
             app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
@@ -200,7 +208,7 @@ def test_latest_readings_sorted_newest_first_and_respects_limit():
         app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
         try:
             client = TestClient(app_module.app)
-            body = client.get("/api/latest_readings?limit=3").json()
+            body = client.get(f"/api/latest_readings?limit=3&station={STATION}").json()
             assert body["n_total"] == 8
             assert len(body["rows"]) == 3
             assert body["rows"][0]["issue_date"] == "2026-08-27"
@@ -271,11 +279,12 @@ def test_vendored_chartjs_is_served():
 
 def test_collect_endpoint_calls_shared_collect_with_absolute_real_csv():
     """POST /api/collect musi wywolywac run_arctic.collect() (ta sama funkcja
-    co CLI/run.bat) z ABSOLUTNA sciezka REAL_CSV i stacja LONGYEARBYEN, i
-    zwracac jej wynik bez zmian - patrz docstring endpointu w webapp/app.py
-    (dlaczego to osobny przycisk od "Odswiez teraz"). Monkeypatch na
-    app_module._collect_arctic_data, zeby test NIE robil zywego zapytania do
-    Open-Meteo."""
+    co CLI/run.bat) z ABSOLUTNA sciezka REAL_CSV i wybrana stacja (tu: jawnie
+    ?station= - patrz stala STATION - zeby test nie zalezal od tego, ktora
+    stacja akurat jest domyslna), i zwracac jej wynik bez zmian - patrz
+    docstring endpointu w webapp/app.py (dlaczego to osobny przycisk od
+    "Odswiez teraz"). Monkeypatch na app_module._collect_arctic_data, zeby
+    test NIE robil zywego zapytania do Open-Meteo."""
     with tempfile.TemporaryDirectory() as d:
         real_csv, demo_csv = _client_with_real_csv(d)
         old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
@@ -301,7 +310,7 @@ def test_collect_endpoint_calls_shared_collect_with_absolute_real_csv():
         app_module._collect_arctic_data = fake_collect
         try:
             client = TestClient(app_module.app)
-            r = client.post("/api/collect")
+            r = client.post(f"/api/collect?station={STATION}")
             assert r.status_code == 200
             body = r.json()
             assert body["n_forecast_added"] == 3
@@ -351,47 +360,59 @@ def test_collect_endpoint_passes_through_fetch_errors():
 
 # ── Wiele stacji (dodane 2026-08-31) ────────────────────────────────────
 
-HORNSUND_STATION = "Hornsund_Polska_Stacja_Polarna"
+HORNSUND_STATION = DEFAULT_STATION  # ta sama stacja - Hornsund jest teraz domyslna
 
 
 def test_stations_endpoint_lists_full_registry():
     """GET /api/stations - lista dla dropdowna w dashboardzie, patrz
-    'Wiele stacji' w docstringu webapp/app.py. `default` musi byc
-    Longyearbyen - to jest stacja, na ktora domyslnie spadaja wszystkie
-    inne endpointy bez ?station=, zeby stare wywolania/testy dalej
-    dzialaly bez zmian."""
+    'Wiele stacji' w docstringu webapp/app.py. `default` to Hornsund
+    (Polska Stacja Polarna) - zmienione z Longyearbyen na wyrazna prosbe
+    uzytkownika ('ustaw polska jako domyslna'), patrz HISTORIA_BUDOWY.md.
+    `north`/`south` to to samo co `stations`, tylko pogrupowane po
+    polkuli (patrz ArcticStation.hemisphere) - dashboard buduje z nich
+    dwa optgroup bez wlasnej logiki grupowania."""
     client = TestClient(app_module.app)
     r = client.get("/api/stations")
     assert r.status_code == 200
     body = r.json()
-    assert body["default"] == STATION
+    assert body["default"] == DEFAULT_STATION
     names = {s["name"] for s in body["stations"]}
     assert STATION in names
     assert HORNSUND_STATION in names
-    assert len(body["stations"]) == 7
+    assert len(body["stations"]) == 10
+    north_names = {s["name"] for s in body["north"]}
+    south_names = {s["name"] for s in body["south"]}
+    assert len(north_names) == 6
+    assert len(south_names) == 4
+    assert north_names | south_names == names
+    assert north_names & south_names == set()
+    assert all(s["hemisphere"] == "N" for s in body["north"])
+    assert all(s["hemisphere"] == "S" for s in body["south"])
 
 
 def test_status_filters_by_station_param():
-    """?station=<inna stacja> ma zwrocic dane TEJ stacji, nie domyslnego
-    Longyearbyen - wiersze zapisane pod inna nazwa stacji nie powinny sie
-    tam wcale pojawic (to samo filtrowanie po kolumnie 'station', ktore
-    _read_rows() juz robilo dla Longyearbyen od poczatku)."""
+    """?station=<konkretna stacja> ma zwrocic dane TEJ stacji, niezaleznie
+    od tego, co jest domyslne - wiersze zapisane pod inna nazwa stacji nie
+    powinny sie tam wcale pojawic (to samo filtrowanie po kolumnie
+    'station', ktore _read_rows() robilo od poczatku). Dodatkowo:
+    brak ?station= ma trafic w DEFAULT_STATION (Hornsund), nie w
+    Longyearbyen - to jest wlasnie ta zmiana z 2026-08-31."""
     with tempfile.TemporaryDirectory() as d:
         real_csv, demo_csv = _client_with_real_csv(d)
         append_snapshot(real_csv, STATION, [_forecast_row("2026-08-27", 5.0)],
                          issue_date=date(2026, 8, 27), source="prognoza")
-        append_snapshot(real_csv, HORNSUND_STATION, [_forecast_row("2026-08-27", -2.0)],
+        append_snapshot(real_csv, DEFAULT_STATION, [_forecast_row("2026-08-27", -2.0)],
                          issue_date=date(2026, 8, 27), source="prognoza")
         old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
         app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
         try:
             client = TestClient(app_module.app)
             r_default = client.get("/api/status")
-            r_hornsund = client.get(f"/api/status?station={HORNSUND_STATION}")
-            assert r_default.json()["station"] == STATION
+            r_longyearbyen = client.get(f"/api/status?station={STATION}")
+            assert r_default.json()["station"] == DEFAULT_STATION
             assert r_default.json()["n_rows_real"] == 1
-            assert r_hornsund.json()["station"] == HORNSUND_STATION
-            assert r_hornsund.json()["n_rows_real"] == 1
+            assert r_longyearbyen.json()["station"] == STATION
+            assert r_longyearbyen.json()["n_rows_real"] == 1
         finally:
             app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
 

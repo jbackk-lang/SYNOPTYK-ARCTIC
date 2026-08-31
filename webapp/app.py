@@ -47,8 +47,10 @@ tymczasowe - appka nigdy nie pisze do CSV, tylko czyta, więc to bezpieczne.
 przyjmują teraz opcjonalny query param `?station=<nazwa>` (patrz
 `arctic_synoptyk.station.STATIONS_BY_NAME` - dokładnie te same nazwy, co w
 kolumnie `station` w CSV). Brak parametru = domyślnie `DEFAULT_STATION`
-(Longyearbyen) - CELOWO, żeby istniejące wywołania (i istniejące testy w
-`tests/test_webapp.py` sprzed tej zmiany) dalej działały bez modyfikacji.
+(Hornsund, Polska Stacja Polarna — ustawione tak na wyraźną prośbę
+użytkownika 2026-08-31, patrz HISTORIA_BUDOWY.md) - endpointy nadal
+działają identycznie dla dowolnej innej stacji, tylko domyślna zmieniła
+się z Longyearbyen na Hornsund.
 Nieznana nazwa stacji -> HTTP 404 (jawny błąd, nie cichy fallback - ten
 sam wzorzec co `ArcticStation`/`station.py`, patrz tamten docstring o
 `topomap_data.py` w Synoptyk-v2.0). Nowy `GET /api/stations` daje
@@ -67,13 +69,18 @@ from fastapi.staticfiles import StaticFiles
 
 from arctic_synoptyk.bias import compute_lead_bias
 from arctic_synoptyk.offline import classify_staleness
-from arctic_synoptyk.station import LONGYEARBYEN, STATIONS, STATIONS_BY_NAME
+from arctic_synoptyk.station import LONGYEARBYEN, HORNSUND, STATIONS, STATIONS_BY_NAME, STATIONS_NORTH, STATIONS_SOUTH
 from run_arctic import collect as _collect_arctic_data
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 REAL_CSV = BASE_DIR / "arctic_forecast_snapshots.csv"
 DEMO_CSV = BASE_DIR / "demo_synthetic_arctic_snapshots.csv"
-DEFAULT_STATION = LONGYEARBYEN.name
+DEFAULT_STATION = HORNSUND.name  # zmienione z Longyearbyen 2026-08-31, na
+# wyrazna prosbe uzytkownika ("ustaw polska jako domyslna") - patrz
+# HISTORIA_BUDOWY.md. Hornsund (Polska Stacja Polarna, Arktyka) wybrany
+# nad Arctowski (rowniez polska, ale Antarktyda) bo lepiej pasuje do
+# nazwy/tematu projektu (SYNOPTYK-ARCTIC) i to ta stacja padla jako
+# pierwsza w rozmowie o polskich stacjach.
 STATION = DEFAULT_STATION  # zachowane dla wstecznej zgodnosci (patrz nizej)
 DEMO_STATION = "Longyearbyen_Svalbard_DEMO"
 MIN_SAMPLES = 5
@@ -111,13 +118,19 @@ def _read_rows(csv_path: Path, station: str) -> list[dict]:
 
 @app.get("/api/stations")
 def stations() -> dict:
-    """Lista wszystkich stacji (nazwa + wspolrzedne) do zbudowania
-    dropdowna w dashboardzie - patrz "Wiele stacji" w docstringu modulu."""
+    """Lista wszystkich stacji (nazwa + wspolrzedne + polkula) do
+    zbudowania dropdowna w dashboardzie - patrz "Wiele stacji" w
+    docstringu modulu. `hemisphere` ("N"/"S", liczone z lat - patrz
+    ArcticStation.hemisphere) pozwala frontendowi pogrupowac liste na
+    dwa optgroup (Polnoc/Poludnie) bez duplikowania logiki grupowania
+    po stronie JS."""
+    def _as_dict(s):
+        return {"name": s.name, "lat": s.lat, "lon": s.lon, "hemisphere": s.hemisphere}
+
     return {
-        "stations": [
-            {"name": s.name, "lat": s.lat, "lon": s.lon}
-            for s in STATIONS
-        ],
+        "stations": [_as_dict(s) for s in STATIONS],
+        "north": [_as_dict(s) for s in STATIONS_NORTH],
+        "south": [_as_dict(s) for s in STATIONS_SOUTH],
         "default": DEFAULT_STATION,
     }
 
@@ -142,6 +155,7 @@ def status(station: str | None = None) -> dict:
         "station": st.name,
         "lat": st.lat,
         "lon": st.lon,
+        "hemisphere": st.hemisphere,
         "n_rows_real": len(rows),
         "n_days_collected": len(issue_dates),
         "last_issue_date": last_issue_date,

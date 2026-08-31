@@ -35,6 +35,14 @@ class ArcticStation:
     grid_lat: float | None = None
     grid_lon: float | None = None
 
+    @property
+    def hemisphere(self) -> str:
+        """"N"/"S" liczone WPROST z `lat` (nie osobne, ręcznie wpisywane
+        pole) - jedno źródło prawdy, nie da się przypadkiem rozjechać przy
+        dodawaniu nowej stacji (patrz `STATIONS_NORTH`/`STATIONS_SOUTH`
+        niżej, grupowanie w dropdownie dashboardu)."""
+        return "S" if self.lat < 0 else "N"
+
 
 # Longyearbyen, Svalbard - jedyna stacja tego modułu zweryfikowana na
 # realnych danych (2026-08-26, patrz tests/fixtures/*.json). Współrzędne
@@ -134,5 +142,48 @@ ARCTOWSKI = ArcticStation(
     declared_altitude_m=2.0,
 )
 
-STATIONS = [LONGYEARBYEN, HORNSUND, NY_ALESUND, ALERT, UTQIAGVIK, TIKSI, ARCTOWSKI]
+# ── Pozostałe stacje półkuli południowej (dodane 2026-08-31, na pytanie
+# "czy sa inne stacje oprocz arctowskiego" - tak, dolozone 3 kolejne
+# uznane/znane stacje antarktyczne) ──
+
+# McMurdo Station (USA) - największa stacja badawcza na Antarktydzie,
+# Wyspa Rossa, obsługiwana przez United States Antarctic Program.
+MCMURDO = ArcticStation(
+    name="McMurdo_Antarktyda",
+    lat=-77.846323,
+    lon=166.668235,
+    declared_altitude_m=10.0,
+)
+
+# Amundsen-Scott South Pole Station (USA) - DOKŁADNIE na biegunie
+# południowym (90°S) - długość geograficzna jest tam matematycznie
+# nieokreślona (wszystkie południki się zbiegają), przyjęto
+# konwencjonalne 0°E (tak samo jak większość źródeł, patrz Wikipedia).
+SOUTH_POLE = ArcticStation(
+    name="Amundsen_Scott_Biegun_Poludniowy",
+    lat=-90.0,
+    lon=0.0,
+    declared_altitude_m=2835.0,
+)
+
+# Stacja Wostok (Rosja) - wnętrze Antarktydy Wschodniej, miejsce
+# zarejestrowania najniższej temperatury na Ziemi (-89.2°C, 1983).
+VOSTOK = ArcticStation(
+    name="Wostok_Antarktyda",
+    lat=-78.464422,
+    lon=106.837328,
+    declared_altitude_m=3488.0,
+)
+
+STATIONS = [
+    LONGYEARBYEN, HORNSUND, NY_ALESUND, ALERT, UTQIAGVIK, TIKSI,
+    ARCTOWSKI, MCMURDO, SOUTH_POLE, VOSTOK,
+]
 STATIONS_BY_NAME = {s.name: s for s in STATIONS}
+# Grupowanie po półkuli - uzywane przez webapp/app.py (GET /api/stations)
+# do zbudowania dwoch optgroup w dropdownie dashboardu (Polnoc/Poludnie).
+# Liczone z `hemisphere` (patrz property na ArcticStation), nie osobna
+# reczna lista - dodanie nowej stacji do STATIONS automatycznie trafia
+# do wlasciwej grupy przez sam znak `lat`.
+STATIONS_NORTH = [s for s in STATIONS if s.hemisphere == "N"]
+STATIONS_SOUTH = [s for s in STATIONS if s.hemisphere == "S"]

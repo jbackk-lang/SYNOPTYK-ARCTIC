@@ -4,7 +4,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from arctic_synoptyk.station import (
     ArcticStation, LONGYEARBYEN, HORNSUND, NY_ALESUND, ALERT, UTQIAGVIK,
-    TIKSI, ARCTOWSKI, STATIONS, STATIONS_BY_NAME,
+    TIKSI, ARCTOWSKI, MCMURDO, SOUTH_POLE, VOSTOK,
+    STATIONS, STATIONS_BY_NAME, STATIONS_NORTH, STATIONS_SOUTH,
 )
 
 
@@ -56,11 +57,12 @@ def test_no_silent_default_for_missing_station():
 
 # ── Wiele stacji (dodane 2026-08-31) ────────────────────────────────────
 
-def test_stations_list_has_seven_unique_entries():
-    """Longyearbyen + 6 dodanych 2026-08-31 (Hornsund, Ny-Alesund, Alert,
-    Utqiagvik, Tiksi, Arctowski) - nazwy musza byc unikalne, bo `station`
-    to klucz idempotentnosci w snapshots.py (patrz append_snapshot)."""
-    assert len(STATIONS) == 7
+def test_stations_list_has_ten_unique_entries():
+    """Longyearbyen + 9 dodanych 2026-08-31: Hornsund, Ny-Alesund, Alert,
+    Utqiagvik, Tiksi (polnoc) + Arctowski, McMurdo, Amundsen-Scott, Wostok
+    (poludnie) - nazwy musza byc unikalne, bo `station` to klucz
+    idempotentnosci w snapshots.py (patrz append_snapshot)."""
+    assert len(STATIONS) == 10
     names = [s.name for s in STATIONS]
     assert len(names) == len(set(names)), "zduplikowana nazwa stacji zepsulaby idempotentnosc CSV"
 
@@ -80,24 +82,33 @@ def test_new_stations_have_no_uhi_field_either():
 
 def test_all_stations_have_plausible_coordinates():
     """Luzna kontrola sanity - szerokosc geograficzna w [-90, 90], dlugosc
-    w [-180, 180], i (poza Arctowskim) polkula polnocna wysoka (>60N),
-    bo to modul 'arctic'. Arctowski jest jedynym swiadomym wyjatkiem -
-    patrz test nizej."""
+    w [-180, 180], i stacje polnocne wysoko na polkuli polnocnej (>60N) -
+    to jest modul 'arctic', wiec polnocna grupa ma byc faktycznie
+    arktyczna. Poludniowa grupa (Antarktyda) sprawdzana osobno nizej -
+    tam odwrotne kryterium (<-60)."""
     for s in STATIONS:
         assert -90.0 <= s.lat <= 90.0
         assert -180.0 <= s.lon <= 180.0
-    non_antarctic = [s for s in STATIONS if s is not ARCTOWSKI]
-    assert all(s.lat > 60.0 for s in non_antarctic), (
-        "wszystkie stacje poza Arctowskim powinny byc arktyczne (>60N)"
+    assert all(s.lat > 60.0 for s in STATIONS_NORTH), (
+        "wszystkie stacje polnocne powinny byc arktyczne (>60N)"
+    )
+    assert all(s.lat < -60.0 for s in STATIONS_SOUTH), (
+        "wszystkie stacje poludniowe powinny byc antarktyczne (<-60N)"
     )
 
 
-def test_arctowski_is_the_one_antarctic_exception():
-    """Arctowski (Polska Stacja Antarktyczna) zostal dodany swiadomie na
-    wyrazna prosbe uzytkownika, mimo ze modul nazywa sie 'arctic' - to
-    JEDYNA stacja na polkuli poludniowej w tym zestawie. Nazwa stacji ma
-    w sobie 'Antarktyda' (patrz station.py) wlasnie po to, zeby ten fakt
-    byl widoczny wszedzie, gdzie nazwa stacji sie pojawia (CSV, dashboard,
-    API) - nie tylko w komentarzu w kodzie."""
-    assert ARCTOWSKI.lat < 0, "Antarktyda = polkula poludniowa, szerokosc ujemna"
+def test_southern_hemisphere_stations_are_the_deliberate_antarctic_exception():
+    """4 stacje (Arctowski, McMurdo, Amundsen-Scott, Wostok) sa swiadomym
+    wyjatkiem od nazwy modulu ('arctic') - dodane na wyrazna prosbe
+    uzytkownika (najpierw Arctowski jako druga polska stacja polarna,
+    potem dolozone 3 kolejne uznane stacje antarktyczne po pytaniu 'czy sa
+    inne stacje oprocz arctowskiego'). Kazda ma ujemna szerokosc
+    geograficzna i nalezy do STATIONS_SOUTH - i TYLKO one."""
+    assert set(STATIONS_SOUTH) == {ARCTOWSKI, MCMURDO, SOUTH_POLE, VOSTOK}
+    assert len(STATIONS_SOUTH) == 4
+    for s in STATIONS_SOUTH:
+        assert s.lat < 0, f"{s.name}: Antarktyda = polkula poludniowa, szerokosc ujemna"
+        assert s.hemisphere == "S"
+    for s in STATIONS_NORTH:
+        assert s.hemisphere == "N"
     assert "Antarktyda" in ARCTOWSKI.name

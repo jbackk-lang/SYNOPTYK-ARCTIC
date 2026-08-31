@@ -197,12 +197,13 @@ function renderStatus(s) {
   const sub = document.getElementById("station-sub");
   const displayName = s.station.replace(/_/g, " ");
   let note = `${displayName} (${s.lat}, ${s.lon}) — dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).`;
-  // Arctowski to ANTARKTYDA (przeciwna polkula) - jedyna stacja w tym
-  // zestawie, wiec jawne ostrzezenie tutaj, zeby nikt nie odczytal
-  // "noc polarna listopad-luty" z README (dotyczy polkuli polnocnej) jako
-  // uniwersalnej dla wszystkich stacji na dashboardzie.
-  if (s.station.includes("Antarktyda")) {
-    note += ` ⚠️ Ta stacja jest na PÓŁKULI POŁUDNIOWEJ (Antarktyda) — pory roku odwrócone względem reszty stacji.`;
+  // Polkula z /api/status (liczona z lat po stronie backendu, patrz
+  // ArcticStation.hemisphere) - NIE dopasowanie tekstu w nazwie stacji
+  // (kilka stacji poludniowych, np. Amundsen_Scott_Biegun_Poludniowy, nie
+  // ma w nazwie slowa "Antarktyda"), zeby ostrzezenie dzialalo dla
+  // KAZDEJ stacji poludniowej, nie tylko tych z konkretnym slowem w nazwie.
+  if (s.hemisphere === "S") {
+    note += ` ⚠️ Ta stacja jest na PÓŁKULI POŁUDNIOWEJ — pory roku odwrócone względem reszty stacji.`;
   }
   sub.textContent = note;
 }
@@ -323,14 +324,21 @@ async function loadSection(url, renderFn, label) {
 // wyboru realnej stacji.
 let currentStation = null;
 
+function _stationOptions(list) {
+  return list.map(s => `<option value="${s.name}">${s.name.replace(/_/g, " ")}</option>`).join("");
+}
+
 async function loadStations() {
   const sel = document.getElementById("station-select");
   try {
     const data = await getJSON("/api/stations");
     currentStation = data.default;
-    sel.innerHTML = data.stations
-      .map(s => `<option value="${s.name}">${s.name.replace(/_/g, " ")}</option>`)
-      .join("");
+    // Dwie optgroup (Polnoc/Poludnie) - `north`/`south` juz pogrupowane
+    // przez backend (patrz GET /api/stations), zeby JS nie musial znac
+    // logiki "hemisphere z lat" osobno.
+    sel.innerHTML =
+      `<optgroup label="🧭 Północ (Arktyka)">${_stationOptions(data.north)}</optgroup>` +
+      `<optgroup label="🧊 Południe (Antarktyda)">${_stationOptions(data.south)}</optgroup>`;
     sel.value = currentStation;
   } catch (e) {
     console.error("[SYNOPTYK-ARCTIC] Blad /api/stations:", e);
