@@ -192,5 +192,11 @@ HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
   próbujemy go tu agregować samodzielnie. Wypełniony jest normalnie dla
   wierszy z `run_arctic.py` i archiwum — tam Open-Meteo sam liczy
   dominujący kierunek dobowy poprawną metodą, po swojej stronie.
+- Wiersze zapisane PRZED dodaniem `wind_direction_deg` do `fetch.py`
+  (2026-08-31) mają to pole trwale puste w dashboardzie, dopóki nie
+  klikniesz jeszcze raz "▶ Pobierz nowe dane teraz" (albo nie odpali się
+  `run_arctic.py`) — `append_snapshot()` przy tym samym kluczu
+  uzupełnia brakujące pole w miejscu, zamiast czekać na jutrzejszy
+  `issue_date` (patrz `HISTORIA_BUDOWY.md`).
 
 Szczegóły i uzasadnienia każdego z powyższych: [`HISTORIA_BUDOWY.md`](HISTORIA_BUDOWY.md).

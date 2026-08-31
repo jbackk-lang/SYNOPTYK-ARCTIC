@@ -494,3 +494,46 @@ stacja `Longyearbyen_Svalbard_DEMO`) z zamierzonym wzorcem obciążenia
 poprawnie go odtwarza przy większej próbce (n=90 zamiast n=21 zbliża
 wynik do zamierzonych wartości). To demo MECHANIZMU, nie prognoza
 niczego o Longyearbyen — każdy wiersz i wydruk jest tagowany `[DEMO]`.
+
+## Strzałka kierunku wiatru: styl i luka po idempotentności (2026-08-31)
+
+**Styl**: użytkownik zobaczył pogrubioną/powiększoną strzałkę
+(`font-size: 18px; font-weight: 700`, patrz wyżej) na żywym dashboardzie
+i ocenił ją jako za grubą ("dashboard nie przyjmuje tej formy"). Wraca
+do zwykłego stylu tekstu tabeli, zostawiając tylko `color: var(--accent)`
+do odróżnienia od reszty kolumn. Sam znak i logika wyboru strzałki
+(`_wind_arrow`/`windArrow`) bez zmian — to czysto kosmetyczna korekta.
+
+**Luka danych, zgłoszona zaraz potem**: po zmianie stylu użytkownik
+zauważył, że kolumna "kier." nadal pokazuje same "—" mimo kliknięcia
+"Pobierz nowe dane teraz". Przyczyna: `wind_direction_10m_dominant`
+dołączyło do `_DAILY_FIELDS` w `fetch.py` tego samego dnia
+(2026-08-31), ale `append_snapshot()` jest idempotentne po kluczu
+`(station, target_date, issue_date, source)` — wiersze na dziś zostały
+zapisane (przez wcześniejsze uruchomienia tego samego dnia, sprzed
+zmiany) PRZED dodaniem pola, więc klucz już istniał i kolejne pobrania
+z tym samym `issue_date` były po prostu pomijane jako duplikaty — razem
+z ich (teraz dostępnym) kierunkiem wiatru. Bez naprawy kolumna
+zostałaby pusta aż do jutra (nowy `issue_date` = nowy klucz).
+
+Naprawa w `snapshots.py::append_snapshot()`: gdy klucz już istnieje w
+CSV, ale jego `wind_direction_deg` jest puste, a nowo pobrany rekord
+faktycznie ma tę wartość — dopisujemy ją do ISTNIEJĄCEGO wiersza
+zamiast pomijać go w ciszy (funkcja przeszła z trybu "append-only" na
+"czytaj cały CSV, uzupełnij/dopisz, zapisz cały plik" — bezpieczne przy
+30-dniowej retencji, plik jest mały). Uzupełnianie działa tylko w jedną
+stronę (nigdy nie nadpisuje już zapisanej realnej wartości nową) i nie
+wlicza się do zwracanego `n` nowych wierszy — to nie jest nowy wiersz,
+tylko domknięcie starego. Ten sam mechanizm samoczynnie naprawi
+analogiczną lukę dla każdego przyszłego "miękkiego" pola dodanego w
+środku dnia zbierania.
+
+Testy (+2, `tests/test_snapshots.py`): uzupełnienie pustego pola na
+istniejącym kluczu bez duplikowania wiersza, oraz dowód że realna
+wartość nigdy nie jest nadpisywana kolejnym pobraniem. 76/76 testów
+przechodzi.
+
+**Do zrobienia lokalnie**: to wymaga jeszcze jednego uruchomienia
+`python run_arctic.py` albo kliknięcia "Pobierz nowe dane teraz" na
+prawdziwym API (sandbox nie ma dostępu do `api.open-meteo.com`) — dopiero
+wtedy dzisiejsze wiersze faktycznie dostaną kierunek wiatru.
