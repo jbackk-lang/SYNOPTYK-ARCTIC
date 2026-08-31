@@ -274,6 +274,49 @@ payloadu (zgodnego z dokumentacją, teraz też potwierdzonego realną
 odpowiedzią) — nie zapisano surowej odpowiedzi API jako fixture, bo
 `backtest_real.py` był uruchomiony poza tym środowiskiem.
 
+### `backfill_real_history.py` — jak `backtest_real.py`, ale zasila dashboard (2026-08-31)
+
+Zgłoszenie: po 5 dniach zbierania (`run_arctic.py`) dashboard dalej
+pokazywał "za mało (n<5)" na każdym `lead_days` — pytanie użytkownika,
+czy nie da się tego "załadować" realnymi danymi archiwalnymi, tak jak
+SynoptykV4 w Synoptyk-v2.0 liczy od razu na realnej historii zamiast
+czekać.
+
+Odpowiedź: taki mechanizm już istniał (`backtest_real.py`, Etap 4 wyżej),
+ale tylko drukował wynik na konsolę — nic nie trafiało do
+`arctic_forecast_snapshots.csv`, więc dashboard (`/api/real_bias`) o nim
+nie wiedział. `backfill_real_history.py` robi to samo pobranie (Previous
+Runs API + Archive API), ale dopisuje wynik do CSV przez ten sam
+`append_snapshot()` co `run_arctic.py`, pod tymi samymi etykietami
+`source` ("prognoza"/"archiwum_openmeteo") — `compute_lead_bias()` i
+dashboard widzą go od razu, bez czekania na kolejne dni.
+
+**Decyzja użytkownika (spośród trzech opcji: osobny panel / wpis do
+głównego CSV / bez zmian)**: wpisać wprost do głównego CSV pod tymi
+samymi etykietami, żeby wynik był widoczny w istniejących panelach bez
+nowego endpointu. Świadomy koszt: w przeciwieństwie do reszty projektu
+(gdzie dane demo mają zawsze `_DEMO` w nazwie stacji), po samym CSV nie
+da się już odróżnić wiersza "zebranego dziś na żywo" od "dociągniętego z
+historycznego backfillu" — obie kategorie są jednak PRAWDZIWYMI danymi
+Open-Meteo tej samej wielkości (dobowe maksimum), więc uznano to za
+akceptowalne uproszczenie, nie za ukrywanie czegoś nieuczciwego.
+
+Implementacja: `build_prognoza_groups()` liczy `issue_date = target_date -
+lead_days` dla każdej pary z Previous Runs API i grupuje po `issue_date`
+(jedno wywołanie `append_snapshot()` na grupę); wiersze archiwum idą
+wprost z `fetch_archive()` z `issue_date=dzisiaj`. Ograniczenie: Previous
+Runs API zwraca tylko temperaturę, więc backfillowane wiersze "prognoza"
+mają puste `min/avg/precip/pressure/wind` (nie brak danych — po prostu
+ich tam nie ma w tym źródle).
+
+Testy: `tests/test_backfill_real_history.py` — grupowanie/przesunięcie
+`issue_date` na ręcznie zbudowanym payloadzie (bez żywego zapytania, ten
+sam wzorzec co `test_previous_runs.py`), oraz test wprost sprawdzający
+cel modułu: jedno wywołanie `backfill()` z 7-dniową próbką daje
+`compute_lead_bias()` coś do pokazania natychmiast (bez potrzeby >=5
+dni codziennego zbierania), plus test idempotencji (drugie uruchomienie
+nie duplikuje wierszy). 55/55 testów przechodzi.
+
 ### `demo_synthetic_fill.py` — symulacja, natychmiastowa, w pełni zmyślona
 
 Generuje w pełni sztuczne dane (`demo_synthetic_arctic_snapshots.csv`,

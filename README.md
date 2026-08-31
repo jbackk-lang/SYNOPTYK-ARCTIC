@@ -72,9 +72,17 @@ to, co już jest na dysku.
 ## Backtest historyczny (wynik bez czekania tygodniami)
 
 ```bash
-python backtest_real.py 90          # prawdziwa historia (Previous Runs API), 90 dni
-python demo_synthetic_fill.py 90    # w pełni syntetyczne dane, demo mechanizmu
+python backtest_real.py 90           # prawdziwa historia (Previous Runs API), tylko na konsolę
+python backfill_real_history.py 90   # to samo, ALE dopisuje do arctic_forecast_snapshots.csv -
+                                      # /api/real_bias i dashboard pokazują wynik od razu
+python demo_synthetic_fill.py 90     # w pełni syntetyczne dane, demo mechanizmu
 ```
+
+`backfill_real_history.py` dopisuje prawdziwe, historyczne pary
+prognoza/rzeczywistość pod tymi samymi etykietami `source` co codzienne
+zbieranie (`prognoza`/`archiwum_openmeteo`) — świadomy kompromis,
+uzasadnienie w `HISTORIA_BUDOWY.md`. Idempotentne (bezpiecznie uruchomić
+kilka razy albo obok `run_arctic.py`).
 
 ## Testy
 
@@ -82,7 +90,7 @@ python demo_synthetic_fill.py 90    # w pełni syntetyczne dane, demo mechanizmu
 pytest -v
 ```
 
-Wszystkie testy przechodzą (stan na 2026-08-30: 52/52) — w tym część
+Wszystkie testy przechodzą (stan na 2026-08-31: 55/55) — w tym część
 bezpośrednio na prawdziwych odpowiedziach API z 2026-08-26
 (`test_fetch.py`), na izolowanych/tymczasowych CSV (`test_webapp.py`,
 monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`, nigdy nie dotyka prawdziwych
@@ -101,7 +109,8 @@ arctic_synoptyk/
     connectivity_sim.py  — symulacja wielodniowej przerwy w łączności
 run_arctic.py            — codzienny runner (collect() + CLI; uruchamiać lokalnie, nie w sandboksie)
 fetch_arctic_test.py     — samodzielny skrypt testowy (bez zależności)
-backtest_real.py         — realny backtest historyczny (Previous Runs API), uruchamiać lokalnie
+backtest_real.py         — realny backtest historyczny (Previous Runs API), tylko na konsolę, uruchamiać lokalnie
+backfill_real_history.py — to samo co backtest_real.py, ale dopisuje do CSV (patrz sekcja wyżej), uruchamiać lokalnie
 demo_synthetic_fill.py   — generuje syntetyczne dane demo (osobny CSV/stacja)
 webapp/
     app.py               — FastAPI: status/real_bias/demo_bias/latest_readings/collect (patrz tabela wyżej)
@@ -110,15 +119,15 @@ webapp/
 run_dashboard.bat        — uruchamia dashboard www
 arctic_forecast_snapshots.csv         — realne dane z bieżących uruchomień
 demo_synthetic_arctic_snapshots.csv   — syntetyczne dane demo, osobno od realnych
-tests/                   — 52 testy, w tym na fixtures z prawdziwego API
+tests/                   — 55 testów, w tym na fixtures z prawdziwego API
 HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
 ```
 
 ## Znane ograniczenia
 
 - Sandbox deweloperski nie ma dostępu do `api.open-meteo.com` —
-  `run_arctic.py`, `backtest_real.py` i dashboard z realnym `/api/collect`
-  trzeba uruchamiać lokalnie.
+  `run_arctic.py`, `backtest_real.py`, `backfill_real_history.py` i
+  dashboard z realnym `/api/collect` trzeba uruchamiać lokalnie.
 - `temp_avg_c_approx` w CSV to (max+min)/2, **nie** prawdziwa średnia
   dobowa (Open-Meteo agreguje dobowo po swojej stronie, bez godzinowego
   sygnału) — traktować jako przybliżenie.
