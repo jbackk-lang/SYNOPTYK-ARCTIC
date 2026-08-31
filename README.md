@@ -85,6 +85,18 @@ starsze wiersze trafiają do `arctic_forecast_snapshots_archive.csv` (ten
 sam układ kolumn, nigdy nie przycinany) — pełna historia zawsze dostępna
 do ręcznej analizy, plik roboczy zostaje mały.
 
+### Prognoza 7 dni
+
+Dashboard ma panel "Prognoza 7 dni" — wykres + tabela najświeższej
+prognozy (dzień po dniu, temp min/max, kierunek wiatru), zbudowany z
+`GET /api/forecast_outlook`. W odróżnieniu od "Surowe odczyty" (płaska
+lista ostatnich wierszy z różnych `issue_date`, oba źródła naraz), ten
+panel bierze WYŁĄCZNIE najświeższe `source="prognoza"` i sortuje po
+`target_date` — dzięki temu ostre zmiany pogody (np. gwałtowne
+ochłodzenie w środku tygodnia) są widoczne na pierwszy rzut oka, nie
+trzeba ich wyławiać ręcznie z surowej tabeli. Pokazuje też odznakę
+ostrzegawczą, gdy dzień-do-dnia różnica temp. maks. wynosi ≥5°C.
+
 ## Dashboard www
 
 ```bash
@@ -111,6 +123,7 @@ to, co już jest na dysku.
 |---|---|
 | `GET /api/stations` | lista wszystkich stacji (nazwa + współrzędne + półkula), plus już pogrupowane `north`/`south` do dropdowna |
 | `GET /api/status` | metadane stacji + liczba dni + poziom świeżości |
+| `GET /api/forecast_outlook` | prognoza "dzień po dniu" z najświeższego pobrania — dane pod panel "Prognoza 7 dni" |
 | `GET /api/real_bias` | oficjalny bias/MAE (>=5 par) + surowe liczniki n |
 | `GET /api/demo_bias` | bias/MAE na danych syntetycznych + disclaimer |
 | `GET /api/latest_readings` | ostatnie N surowych, niesparowanych wierszy z CSV — widoczność że kolektor pisze dane, niezależnie od progu `min_samples` |
@@ -197,7 +210,7 @@ retencja).
 pytest -v
 ```
 
-Wszystkie testy przechodzą (stan na 2026-08-31: 88/88) — w tym część
+Wszystkie testy przechodzą (stan na 2026-08-31: 93/93) — w tym część
 bezpośrednio na prawdziwych odpowiedziach API z 2026-08-26
 (`test_fetch.py`), na izolowanych/tymczasowych CSV (`test_webapp.py`,
 monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`, nigdy nie dotyka prawdziwych
