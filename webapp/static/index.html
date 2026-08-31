@@ -4,7 +4,11 @@
 <meta charset="UTF-8">
 <title>SYNOPTYK-ARCTIC — Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<!-- Chart.js zaladowany lokalnie z /static/vendor/, NIE z zewnetrznego CDN -
+     na sieci firmowej z ograniczonym dostepem do internetu ladowanie z
+     CDN cicho zawodzilo, `Chart` nigdy nie powstawal i przycisk "Odswiez
+     teraz" wygladal jakby nic nie robil. -->
+<script src="/static/vendor/chart.umd.js"></script>
 <style>
   :root {
     --bg: #0b0f14;
@@ -58,8 +62,14 @@
   th, td { text-align: right; padding: 4px 8px; border-bottom: 1px solid var(--panel-border); }
   th:first-child, td:first-child { text-align: left; }
   th { color: var(--muted); font-weight: normal; }
+  /* Strzalka kierunku wiatru - ten sam pojedynczy znak co Synoptyk-v2.0
+     (WIND_ARROWS). Pogrubiona (font-weight, BEZ powiekszania rozmiaru
+     tym razem - poprzednia wersja 18px+700 byla za gruba/duza calosciowo,
+     patrz HISTORIA_BUDOWY.md), zeby dalo sie ja odczytac na pierwszy
+     rzut oka, ale zostala w rozmiarze reszty tabeli. */
+  .wind-arrow { color: var(--accent); font-weight: 700; }
   canvas { max-height: 260px; }
-  #refresh-btn {
+  #refresh-btn, #collect-btn {
     background: var(--accent-dim);
     color: var(--text);
     border: 1px solid var(--accent);
@@ -69,14 +79,33 @@
     cursor: pointer;
     font-size: 12px;
   }
-  #refresh-btn:hover { background: var(--accent); color: #08110f; }
+  #refresh-btn:hover, #collect-btn:hover { background: var(--accent); color: #08110f; }
+  #refresh-btn:disabled, #collect-btn:disabled { opacity: 0.5; cursor: default; background: var(--accent-dim); color: var(--text); }
   footer { color: var(--muted); font-size: 11px; margin-top: 24px; border-top: 1px solid var(--panel-border); padding-top: 12px; }
+  /* Przelacznik stacji (dodane 2026-08-31, wiele stacji naraz - patrz
+     "Wiele stacji" w webapp/app.py) - trzyma sie stylu reszty appki
+     (mono font, akcent), zeby nie wygladal jak obcy element. */
+  #station-select {
+    background: var(--panel);
+    color: var(--text);
+    border: 1px solid var(--accent-dim);
+    border-radius: 4px;
+    padding: 5px 10px;
+    font-family: var(--mono);
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .header-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
 </style>
 </head>
 <body>
 
-<h1>🧊 SYNOPTYK-ARCTIC — Dashboard</h1>
-<div class="sub">Longyearbyen, Svalbard &mdash; dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).</div>
+<div class="header-row">
+  <h1 style="margin:0;">🧊 SYNOPTYK-ARCTIC — Dashboard</h1>
+  <select id="station-select" onchange="onStationChange()"><option>ładowanie stacji…</option></select>
+</div>
+<div class="sub" id="station-sub">dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).</div>
+<div id="global-error" class="warn-banner" style="display:none;"></div>
 
 <div class="grid">
   <div class="panel" id="status-panel">
@@ -84,16 +113,27 @@
     <div id="status-body">ładowanie…</div>
   </div>
   <div class="panel">
-    <h2>Odśwież</h2>
-    <div class="empty-note">Dane pochodzą z <code>arctic_forecast_snapshots.csv</code>. Uruchom <code>run_arctic.py</code> na laptopie, żeby dopisać kolejny dzień, potem kliknij odśwież.</div>
-    <button id="refresh-btn" onclick="loadAll()">↻ Odśwież teraz</button>
+    <h2>Odśwież / Pobierz</h2>
+    <div class="empty-note">
+      <strong>▶ Pobierz nowe dane teraz</strong> łączy się z Open-Meteo i dopisuje
+      dzisiejszy dzień do <code>arctic_forecast_snapshots.csv</code> (to samo, co
+      <code>run.bat</code>/<code>python run_arctic.py</code>), a potem od razu
+      odświeża widok. <strong>↻ Odśwież teraz</strong> tylko na nowo czyta CSV
+      z dysku, bez pobierania niczego nowego — użyteczne, jeśli dane
+      dopisał ktoś inny (np. zaplanowane zadanie).
+    </div>
+    <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
+      <button id="collect-btn" onclick="collectNow()">▶ Pobierz nowe dane teraz</button>
+      <button id="refresh-btn" onclick="loadAll()">↻ Odśwież teraz</button>
+    </div>
+    <div id="collect-status" class="empty-note" style="margin-top:8px;"></div>
   </div>
 </div>
 
 <div class="panel" style="margin-bottom:20px;">
   <h2>Surowe odczyty — czy kolektor w ogóle działa?</h2>
   <div class="empty-note">Każdy wiersz to jeden zapis do CSV (prognoza albo pobranie z archiwum) - widoczny od razu, niezależnie od tego, czy uzbierało się już >= min_samples par do tabeli trafności poniżej. Jeśli tu coś jest, pipeline żyje.</div>
-  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
+  <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>opad mm</th><th>wiatr km/h</th><th>kier.</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
 </div>
 
 <div class="panel" style="margin-bottom:20px;">
@@ -111,7 +151,7 @@
 </div>
 
 <footer>
-  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/status, /api/real_bias, /api/demo_bias
+  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/stations, /api/status, /api/real_bias, /api/demo_bias, /api/latest_readings
 </footer>
 
 <script>
@@ -120,6 +160,22 @@ let realChart, demoChart;
 async function getJSON(url) {
   const r = await fetch(url, { cache: "no-store" });
   return r.json();
+}
+
+// 8 kierunkow, strzalka pokazuje DOKAD wieje wiatr (nie skad - to
+// odwrotnosc meteorologicznego "kierunku" 0-360, ktory podaje ZRODLO
+// wiatru) - DOKLADNIE ten sam wzorzec co Synoptyk-v2.0
+// (gui_app.py::_WIND_ARROWS/_wind_arrow), zeby obie appki czytaly sie tak
+// samo.
+const WIND_ARROWS = ["↑", "↗", "→", "↘", "↓", "↙", "←", "↖"];
+
+function windArrow(degFrom) {
+  if (degFrom === null || degFrom === undefined || degFrom === "" || Number.isNaN(Number(degFrom))) {
+    return "—";
+  }
+  const degTo = (Number(degFrom) + 180) % 360;
+  const idx = Math.floor(((degTo + 22.5) % 360) / 45);
+  return WIND_ARROWS[idx];
 }
 
 function renderStatus(s) {
@@ -136,19 +192,41 @@ function renderStatus(s) {
     <div class="stat"><span class="k">Świeżość</span><span class="v">${staleBadge}</span></div>
     <div class="stat"><span class="k">Próg min_samples</span><span class="v">${s.min_samples_required}</span></div>
   `;
+  // Podpis pod naglowkiem trzyma sie danych z /api/status, wiec zawsze
+  // pokazuje AKTUALNIE wybrana stacje bez osobnej logiki synchronizacji.
+  const sub = document.getElementById("station-sub");
+  const displayName = s.station.replace(/_/g, " ");
+  let note = `${displayName} (${s.lat}, ${s.lon}) — dane czytane na żywo z CSV przy każdym odświeżeniu strony (nie plik statyczny).`;
+  // Polkula z /api/status (liczona z lat po stronie backendu, patrz
+  // ArcticStation.hemisphere) - NIE dopasowanie tekstu w nazwie stacji
+  // (kilka stacji poludniowych, np. Amundsen_Scott_Biegun_Poludniowy, nie
+  // ma w nazwie slowa "Antarktyda"), zeby ostrzezenie dzialalo dla
+  // KAZDEJ stacji poludniowej, nie tylko tych z konkretnym slowem w nazwie.
+  if (s.hemisphere === "S") {
+    note += ` ⚠️ Ta stacja jest na PÓŁKULI POŁUDNIOWEJ — pory roku odwrócone względem reszty stacji.`;
+  }
+  sub.textContent = note;
 }
 
 function renderLatestReadings(data) {
   const tbody = document.querySelector("#readings-table tbody");
   tbody.innerHTML = "";
   if (!data.rows || data.rows.length === 0) {
-    tbody.innerHTML = `<tr><td colspan="6" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" class="empty-note">brak wierszy w CSV jeszcze — uruchom run_arctic.py</td></tr>`;
     return;
   }
   data.rows.forEach(row => {
     const tr = document.createElement("tr");
     const srcLabel = row.source === "prognoza" ? "📡 prognoza" : "📚 archiwum";
-    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${row.pressure_hpa ?? "—"}</td>`;
+    // precip_mm/wind_kmh/wind_direction_deg: puste string dla wierszy
+    // prognozy z backfillu, gdy Previous Runs API nie zwrocilo danego pola
+    // dla tego dnia (kierunek jest tam ZAWSZE pusty, celowo - patrz
+    // backfill_real_history.py::_forecast_record) - traktowane tak samo
+    // jak brak danych, nie "0".
+    const precip = (row.precip_mm ?? "") === "" ? "—" : row.precip_mm;
+    const wind = (row.wind_kmh ?? "") === "" ? "—" : row.wind_kmh;
+    const arrow = windArrow(row.wind_direction_deg);
+    tr.innerHTML = `<td>${srcLabel}</td><td>${row.issue_date ?? "—"}</td><td>${row.target_date ?? "—"}</td><td>${row.lead_days ?? "—"}</td><td>${row.temp_max_c ?? "—"}</td><td>${precip}</td><td>${wind}</td><td class="wind-arrow" title="${row.wind_direction_deg ?? ""}°">${arrow}</td><td>${row.pressure_hpa ?? "—"}</td>`;
     tbody.appendChild(tr);
   });
 }
@@ -205,20 +283,121 @@ function renderDemoBias(data) {
   });
 }
 
-async function loadAll() {
-  const [s, rb, db, lr] = await Promise.all([
-    getJSON("/api/status"),
-    getJSON("/api/real_bias"),
-    getJSON("/api/demo_bias"),
-    getJSON("/api/latest_readings"),
-  ]);
-  renderStatus(s);
-  renderRealBias(rb);
-  renderDemoBias(db);
-  renderLatestReadings(lr);
+const _sectionErrors = {};
+
+function _showGlobalError() {
+  const el = document.getElementById("global-error");
+  const msgs = Object.entries(_sectionErrors).map(([label, msg]) => `${label}: ${msg}`);
+  if (msgs.length === 0) {
+    el.style.display = "none";
+    return;
+  }
+  el.style.display = "block";
+  el.textContent = "⚠️ " + msgs.join(" · ");
 }
 
-loadAll();
+// Kazda sekcja (status / trafnosc real / demo / surowe odczyty) jest
+// odpytywana i renderowana NIEZALEZNIE. Wczesniej jeden nieobsluzony blad
+// (np. "Chart is not defined", gdy CDN nie odpowiadal) przerywal cala
+// funkcje loadAll() w polowie - reszta panelu nigdy sie nie aktualizowala,
+// a przycisk "Odswiez teraz" wygladal jakby zupelnie nic nie robil, bez
+// zadnego widocznego komunikatu (blad ladowal sie tylko do konsoli
+// przegladarki). Teraz blad w jednej sekcji nie blokuje pozostalych, i jest
+// pokazany w widocznym banerze zamiast ginac w konsoli.
+async function loadSection(url, renderFn, label) {
+  try {
+    const data = await getJSON(url);
+    renderFn(data);
+    delete _sectionErrors[label];
+  } catch (e) {
+    console.error(`[SYNOPTYK-ARCTIC] Blad w sekcji "${label}":`, e);
+    _sectionErrors[label] = e.message || String(e);
+  }
+  _showGlobalError();
+}
+
+// Stacja aktualnie wybrana w dropdownie - ladowana raz przy starcie z
+// /api/stations (data.default = Longyearbyen), potem zmieniana tylko
+// przez onStationChange(). Demo (/api/demo_bias) NIE bierze tego
+// parametru - to zawsze jedna, oddzielna stacja syntetyczna
+// (Longyearbyen_Svalbard_DEMO, patrz webapp/app.py), niezalezna od
+// wyboru realnej stacji.
+let currentStation = null;
+
+function _stationOptions(list) {
+  return list.map(s => `<option value="${s.name}">${s.name.replace(/_/g, " ")}</option>`).join("");
+}
+
+async function loadStations() {
+  const sel = document.getElementById("station-select");
+  try {
+    const data = await getJSON("/api/stations");
+    currentStation = data.default;
+    // Dwie optgroup (Polnoc/Poludnie) - `north`/`south` juz pogrupowane
+    // przez backend (patrz GET /api/stations), zeby JS nie musial znac
+    // logiki "hemisphere z lat" osobno.
+    sel.innerHTML =
+      `<optgroup label="🧭 Północ (Arktyka)">${_stationOptions(data.north)}</optgroup>` +
+      `<optgroup label="🧊 Południe (Antarktyda)">${_stationOptions(data.south)}</optgroup>`;
+    sel.value = currentStation;
+  } catch (e) {
+    console.error("[SYNOPTYK-ARCTIC] Blad /api/stations:", e);
+    sel.innerHTML = `<option>błąd ładowania listy stacji</option>`;
+  }
+}
+
+function onStationChange() {
+  currentStation = document.getElementById("station-select").value;
+  loadAll();
+}
+
+function _withStation(url) {
+  const sep = url.includes("?") ? "&" : "?";
+  return `${url}${sep}station=${encodeURIComponent(currentStation)}`;
+}
+
+async function loadAll() {
+  await Promise.all([
+    loadSection(_withStation("/api/status"), renderStatus, "Status stacji"),
+    loadSection(_withStation("/api/real_bias"), renderRealBias, "Trafność (realne)"),
+    loadSection("/api/demo_bias", renderDemoBias, "Demo"),
+    loadSection(_withStation("/api/latest_readings"), renderLatestReadings, "Surowe odczyty"),
+  ]);
+}
+
+// "Pobierz nowe dane teraz" - w odroznieniu od loadAll()/"Odswiez teraz"
+// (ktore TYLKO na nowo czytaja CSV z dysku), to faktycznie laczy sie z
+// Open-Meteo i DOPISUJE nowy wiersz - ta sama funkcja collect() co
+// run_arctic.py/run.bat, wywolana przez POST /api/collect. Po zakonczeniu
+// (sukces albo blad sieci - obsluzone, nie ukryte) odswieza caly widok,
+// zeby nowe dane (jesli sa) byly widoczne od razu, bez osobnego klikania
+// "Odswiez".
+async function collectNow() {
+  const btn = document.getElementById("collect-btn");
+  const status = document.getElementById("collect-status");
+  btn.disabled = true;
+  status.textContent = "⏳ Łączenie z Open-Meteo, pobieranie prognozy i archiwum...";
+  try {
+    const r = await fetch(_withStation("/api/collect"), { method: "POST", cache: "no-store" });
+    const data = await r.json();
+    const parts = [];
+    parts.push(`✅ dopisano ${data.n_forecast_added} wierszy prognozy + ${data.n_archive_added} wierszy archiwum`);
+    if (data.forecast_error) parts.push(`⚠️ błąd prognozy: ${data.forecast_error}`);
+    if (data.archive_error) parts.push(`⚠️ błąd archiwum: ${data.archive_error}`);
+    if (data.n_forecast_added === 0 && data.n_archive_added === 0 && !data.forecast_error && !data.archive_error) {
+      parts.push("(0 nowych wierszy zwykle znaczy: już pobrano dane na dziś — to nie błąd, patrz README o idempotentności)");
+    }
+    status.textContent = parts.join(" · ");
+    await loadAll();
+  } catch (e) {
+    console.error("[SYNOPTYK-ARCTIC] Blad /api/collect:", e);
+    status.textContent = "⚠️ Nie udało się połączyć z serwerem: " + (e.message || e);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+loadStations().then(loadAll);
 </script>
 </body>
 </html>
