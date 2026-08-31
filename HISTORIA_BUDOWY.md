@@ -659,3 +659,45 @@ Testy (+3 netto, kilka przepisanych): rejestr rozszerzony do 10 stacji
 (6 północ / 4 południe), `hemisphere` per stacja, `/api/stations` zwraca
 poprawnie pogrupowane `north`/`south`, nowa wartość `DEFAULT_STATION`.
 88/88 przechodzi.
+
+## Panel "Prognoza 7 dni" (2026-08-31)
+
+Użytkownik zapytał: meteoblue dla Arctowskiego pokazuje ostre ochłodzenie
+w środku tygodnia — czy nasz dashboard to w ogóle wyłapuje? Sprawdzone
+bezpośrednio na realnych danych już zebranych w `arctic_forecast_snapshots.csv`
+(issue_date 2026-08-31, kolektor uruchomiony lokalnie przez użytkownika):
+temp_max_c spada z -0.1°C (31.08) do -10.3°C (02.09), potem wraca do
+-0.6°C (06.09) — po przeliczeniu na wspólną jednostkę różnica względem
+meteoblue to max ~1.2°C na każdym dniu (normalny rozrzut między
+modelami: Open-Meteo best-match vs własny blend meteoblue). **Dane były
+poprawne od początku** — problem był w prezentacji, nie w kolekcji: nie
+istniał żaden panel pokazujący "prognoza dzień po dniu", tylko płaska
+lista ostatnich wierszy (`/api/latest_readings`, miesza źródła i
+`issue_date`) i wsteczny wykres bias/MAE.
+
+Przed wdrożeniem pokazana makieta (`mcp__visualize`) z DOKŁADNIE tymi
+realnymi liczbami Arctowskiego, żeby odpowiedzieć na pytanie "czy to
+będzie czytelne i coś daje" empirycznie, nie deklaratywnie — dopiero po
+akceptacji makiety wbudowane na stałe.
+
+**`GET /api/forecast_outlook?station=`** (`webapp/app.py`): filtruje
+`source="prognoza"` do JEDNEGO, najświeższego `issue_date` (max po
+stringu ISO — leksykograficznie poprawne), sortuje po `target_date`
+rosnąco. Puste `days: []` (nie 404/500) gdy nic jeszcze nie zebrano - ten
+sam wzorzec co pozostałe endpointy.
+
+**Panel w `index.html`**: SVG rysowany ręcznie w JS z wartości danych
+(nie Chart.js) — bo Chart.js nie da się łatwo dopasować do istniejącego
+`--panel`/`--accent`/ciemnego motywu bez dorzucania kolejnej biblioteki
+tylko dla dwóch linii. Pasmo (`polygon`) między max/min + dwie linie +
+tabela z tymi samymi wartościami (dostępność/czytelność dla kogoś, kto
+woli liczby od wykresu). Odznaka `⚠️ ochłodzenie/ocieplenie ±N°C` pojawia
+się, gdy dzień-do-dnia skok `temp_max_c` wynosi ≥5°C — to bezpośrednia,
+widoczna odpowiedź na pytanie "czy synoptyk wyłapuje ostrą zmianę",
+liczona z tych samych danych co wykres, nie osobna logika.
+
+Testy (+5, `test_webapp.py`): pusty wynik bez danych, wybór WYŁĄCZNIE
+najświeższego `issue_date` + sortowanie mimo losowej kolejności zapisu w
+CSV + pominięcie wierszy "archiwum" i starszych `issue_date`, filtrowanie
+po `?station=`, 404 na nieznaną stację, obecność panelu w wyrenderowanym
+HTML. 93/93 przechodzi.

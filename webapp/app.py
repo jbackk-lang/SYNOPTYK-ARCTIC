@@ -31,6 +31,15 @@ Endpointy:
                          /api/real_bias - bez tego endpointu jedyny sposób
                          sprawdzenia "czy coś się zbiera" to zajrzenie do
                          CSV ręcznie na dysku.
+- GET  /api/forecast_outlook — NAJNOWSZE wiersze "prognoza" (jeden
+                         issue_date - ostatni, dla ktorego cokolwiek
+                         zebrano), posortowane po target_date rosnaco -
+                         "prognoza na kolejne dni" w stylu tygodniowki
+                         meteoblue, nie plaska lista jak /api/latest_readings
+                         (patrz "Prognoza 7 dni" nizej - dodane po pytaniu
+                         uzytkownika, czy dashboard w ogole wylapuje ostra
+                         zmiane pogody widoczna na meteoblue dla Arctowskiego
+                         - dane juz to lapaly, tylko nie bylo tego widac).
 - POST /api/collect    — URUCHAMIA faktyczne pobranie nowych danych z
                          Open-Meteo i dopisanie do CSV (to samo, co
                          `python run_arctic.py`/`run.bat`, ta sama funkcja
@@ -56,6 +65,24 @@ sam wzorzec co `ArcticStation`/`station.py`, patrz tamten docstring o
 `topomap_data.py` w Synoptyk-v2.0). Nowy `GET /api/stations` daje
 frontendowi listę wszystkich stacji do zbudowania dropdowna, bez
 duplikowania jej w JS.
+
+## Prognoza 7 dni (dodane 2026-08-31)
+
+`/api/latest_readings` istniał od początku, ale jest to płaska lista
+OSTATNICH N wierszy (miesza "prognoza" i "archiwum_openmeteo", różne
+issue_date) - dobra do "czy kolektor w ogóle coś zapisuje", zła do "jak
+wygląda tydzień naprzód" (trzeba by ręcznie wyławiać wzrokiem wiersze
+jednego issue_date z natłoku innych). `GET /api/forecast_outlook`
+odpowiada wprost na to drugie pytanie - bierze TYLKO najświeższy
+issue_date źródła "prognoza" i zwraca go posortowany po target_date
+rosnąco, gotowe do narysowania jako wykres/tabela "dziś -> +6 dni".
+
+Powód dodania: użytkownik zapytał, czy dashboard w ogóle wyłapuje ostrą
+zmianę pogody widoczną w tym samym czasie na meteoblue dla Arctowskiego.
+Odpowiedź (patrz HISTORIA_BUDOWY.md) była "dane TAK, ale dashboard tego
+nie pokazywał czytelnie" - surowe wiersze były w CSV (Open-Meteo, ten sam
+kolektor co reszta), tylko żaden panel nie prezentował ich jako "tydzień
+naprzód".
 """
 from __future__ import annotations
 
@@ -219,6 +246,40 @@ def latest_readings(limit: int = 20, station: str | None = None) -> dict:
         reverse=True,
     )
     return {"rows": rows_sorted[:limit], "n_total": len(rows)}
+
+
+@app.get("/api/forecast_outlook")
+def forecast_outlook(station: str | None = None) -> dict:
+    """Najnowsza prognoza "dzien po dniu" dla wybranej stacji - patrz
+    "Prognoza 7 dni" w docstringu modulu po pelne uzasadnienie.
+
+    Bierze WYLACZNIE source="prognoza" (nie "archiwum_openmeteo" - to
+    inny widok, przeszlosc nie przyszlosc) z NAJSWIEZSZEGO issue_date w
+    CSV dla tej stacji (max() po stringu ISO - poprawnie sortuje sie
+    leksykograficznie), posortowane po target_date rosnaco. Puste `days`
+    (nie 404/500), jesli jeszcze nic nie zebrano - to normalny stan
+    startowy, ten sam wzorzec co reszta endpointow w tym pliku."""
+    st = _resolve_station(station)
+    rows = [r for r in _read_rows(REAL_CSV, st.name) if r.get("source") == "prognoza"]
+    if not rows:
+        return {"station": st.name, "issue_date": None, "days": []}
+
+    latest_issue = max(r["issue_date"] for r in rows if r.get("issue_date"))
+    latest_rows = sorted(
+        (r for r in rows if r.get("issue_date") == latest_issue),
+        key=lambda r: r.get("target_date", ""),
+    )
+    days = [
+        {
+            "target_date": r.get("target_date"),
+            "lead_days": r.get("lead_days"),
+            "temp_min_c": r.get("temp_min_c"),
+            "temp_max_c": r.get("temp_max_c"),
+            "wind_direction_deg": r.get("wind_direction_deg"),
+        }
+        for r in latest_rows
+    ]
+    return {"station": st.name, "issue_date": latest_issue, "days": days}
 
 
 @app.post("/api/collect")
