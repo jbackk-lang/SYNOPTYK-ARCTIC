@@ -96,6 +96,28 @@
     cursor: pointer;
   }
   .header-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  /* Panel "Prognoza 7 dni" (dodane 2026-08-31 - patrz "Prognoza 7 dni" w
+     webapp/app.py po pelne uzasadnienie: /api/latest_readings jest plaska
+     lista ostatnich wierszy, zla do "jak wyglada tydzien naprzod" - ten
+     panel rysuje TYLKO najswiezsza prognoze jako wykres+tabele, zeby
+     ostre zmiany (spadek/wzrost temp) byly widoczne na pierwszy rzut oka,
+     bez czytania surowych liczb w "Surowe odczyty". Kolory linii (max/min)
+     dobrane pod dark theme, nie z palety Chart.js domyslnej. */
+  #outlook-chart { width: 100%; height: auto; display: block; }
+  .outlook-gridline { stroke: var(--panel-border); stroke-width: 1; }
+  .outlook-band { fill: var(--accent); fill-opacity: 0.12; }
+  .outlook-maxline { fill: none; stroke: #e0745a; stroke-width: 2; }
+  .outlook-minline { fill: none; stroke: #4fa8d1; stroke-width: 2; }
+  .outlook-pt { fill: var(--bg); stroke-width: 2; }
+  .outlook-pt.max { stroke: #e0745a; }
+  .outlook-pt.min { stroke: #4fa8d1; }
+  .outlook-lbl { font-family: var(--mono); font-size: 11px; fill: var(--text); }
+  .outlook-lbl.max { fill: #e0745a; }
+  .outlook-lbl.min { fill: #4fa8d1; }
+  .outlook-daylbl { font-family: var(--mono); font-size: 11px; fill: var(--muted); }
+  .outlook-legend { display: flex; gap: 16px; font-size: 11px; color: var(--muted); margin-top: 6px; }
+  .outlook-legend .sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+  .outlook-swing-badge { display: inline-block; background: var(--warn-bg); border: 1px solid var(--warn-border); color: var(--warn-text); border-radius: 4px; padding: 2px 8px; font-size: 11px; margin-left: 8px; }
 </style>
 </head>
 <body>
@@ -131,6 +153,17 @@
 </div>
 
 <div class="panel" style="margin-bottom:20px;">
+  <h2>Prognoza 7 dni <span id="outlook-badge"></span></h2>
+  <div id="outlook-note" class="empty-note">ładowanie…</div>
+  <svg id="outlook-chart" viewBox="0 0 640 220" role="img" aria-label="Wykres prognozy temperatury maksymalnej i minimalnej na kolejne dni"></svg>
+  <div class="outlook-legend">
+    <span><span class="sw" style="background:#e0745a;"></span>max °C</span>
+    <span><span class="sw" style="background:#4fa8d1;"></span>min °C</span>
+  </div>
+  <table id="outlook-table"><thead><tr><th>data</th><th>max °C</th><th>min °C</th><th>kier.</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="panel" style="margin-bottom:20px;">
   <h2>Surowe odczyty — czy kolektor w ogóle działa?</h2>
   <div class="empty-note">Każdy wiersz to jeden zapis do CSV (prognoza albo pobranie z archiwum) - widoczny od razu, niezależnie od tego, czy uzbierało się już >= min_samples par do tabeli trafności poniżej. Jeśli tu coś jest, pipeline żyje.</div>
   <table id="readings-table"><thead><tr><th>źródło</th><th>issue_date</th><th>target_date</th><th>lead_days</th><th>temp_max °C</th><th>opad mm</th><th>wiatr km/h</th><th>kier.</th><th>ciśnienie hPa</th></tr></thead><tbody></tbody></table>
@@ -143,6 +176,12 @@
   <table id="real-table"><thead><tr><th>lead_days</th><th>n (par)</th><th>bias °C</th><th>MAE °C</th><th>status</th></tr></thead><tbody></tbody></table>
 </div>
 
+<div class="panel" style="margin-bottom:20px;">
+  <h2>Rezonans TIMDR (kalibracja na danych realnych)</h2>
+  <div id="resonance-note" class="empty-note">ładowanie…</div>
+  <div id="resonance-body"></div>
+</div>
+
 <div class="panel">
   <h2>Demo — dane SYNTETYCZNE (mechanizm, nie pomiar)</h2>
   <div class="warn-banner">⚠️ Poniższe liczby pochodzą z <code>demo_synthetic_arctic_snapshots.csv</code> — wygenerowane sztucznie przez <code>demo_synthetic_fill.py</code>, żeby pokazać kształt wyniku, gdy danych już wystarczy. To NIE jest pomiar rzeczywistej trafności stacji Longyearbyen.</div>
@@ -151,7 +190,7 @@
 </div>
 
 <footer>
-  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/stations, /api/status, /api/real_bias, /api/demo_bias, /api/latest_readings
+  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/stations, /api/status, /api/forecast_outlook, /api/real_bias, /api/resonance, /api/demo_bias, /api/latest_readings
 </footer>
 
 <script>
@@ -231,6 +270,107 @@ function renderLatestReadings(data) {
   });
 }
 
+// "Prognoza 7 dni" - patrz "Prognoza 7 dni" w webapp/app.py po pelne
+// uzasadnienie (dodane po pytaniu uzytkownika, czy dashboard w ogole
+// wylapuje ostra zmiane pogody widoczna na meteoblue - dane TAK, tylko
+// zaden panel tego nie pokazywal czytelnie). Wykres rysowany recznie
+// (SVG budowany w JS z wartosci danych), nie przez Chart.js - zeby
+// wspoldzielic dokladnie ten sam wyglad/kolory co reszta ciemnego motywu
+// dashboardu bez dorzucania kolejnej biblioteki.
+function _outlookFmtDay(dateStr) {
+  const p = String(dateStr).split("-");
+  return p.length === 3 ? `${p[2]}.${p[1]}` : dateStr;
+}
+
+function renderForecastOutlook(data) {
+  const note = document.getElementById("outlook-note");
+  const badge = document.getElementById("outlook-badge");
+  const svg = document.getElementById("outlook-chart");
+  const tbody = document.querySelector("#outlook-table tbody");
+  tbody.innerHTML = "";
+  badge.innerHTML = "";
+  svg.innerHTML = "";
+
+  // Tylko dni z KOMPLETNYMI temp_min_c/temp_max_c - wiersze "prognoza" z
+  // backfillu maja te pola zawsze wypelnione (patrz backfill_real_history.py),
+  // ale gdyby kiedys nie byly, lepiej pominac punkt niz rysowac krzywa
+  // przez brakujaca wartosc jako 0.
+  const days = (data.days || []).filter(d =>
+    d.temp_max_c !== "" && d.temp_max_c != null &&
+    d.temp_min_c !== "" && d.temp_min_c != null
+  );
+  if (days.length === 0) {
+    note.textContent = data.issue_date
+      ? "Prognoza z ostatniego pobrania ma niepełne dane temperatur."
+      : "Brak prognozy jeszcze — kliknij „▶ Pobierz nowe dane teraz”.";
+    return;
+  }
+  note.textContent = `Najnowsza prognoza (issue_date ${data.issue_date}), ${days.length} ${days.length === 1 ? "dzień" : "dni"} naprzód.`;
+
+  const maxVals = days.map(d => Number(d.temp_max_c));
+  const minVals = days.map(d => Number(d.temp_min_c));
+  const yMin = Math.min(...minVals) - 2;
+  const yMax = Math.max(...maxVals) + 2;
+
+  const W = 640, H = 220, padL = 40, padR = 20, padT = 20, padB = 30;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const n = days.length;
+  const xOf = i => n === 1 ? padL + plotW / 2 : padL + i * (plotW / (n - 1));
+  const yOf = t => padT + (yMax - t) / (yMax - yMin) * plotH;
+
+  const maxPts = days.map((d, i) => `${xOf(i).toFixed(1)},${yOf(Number(d.temp_max_c)).toFixed(1)}`);
+  const minPts = days.map((d, i) => `${xOf(i).toFixed(1)},${yOf(Number(d.temp_min_c)).toFixed(1)}`);
+  const bandPts = maxPts.concat([...minPts].reverse()).join(" ");
+
+  // Linie siatki co 6 stopni (zaokraglone do wielokrotnosci 6, zeby nie
+  // wypadaly w losowych miejscach jak -13.4).
+  const gridLines = [];
+  for (let g = Math.ceil(yMin / 6) * 6; g <= yMax; g += 6) gridLines.push(g);
+
+  let svgInner = "";
+  gridLines.forEach(g => {
+    const y = yOf(g);
+    svgInner += `<line class="outlook-gridline" x1="${padL}" y1="${y.toFixed(1)}" x2="${W - padR}" y2="${y.toFixed(1)}"/>`;
+    svgInner += `<text class="outlook-daylbl" x="4" y="${(y + 4).toFixed(1)}">${g}°</text>`;
+  });
+  svgInner += `<polygon class="outlook-band" points="${bandPts}"/>`;
+  svgInner += `<polyline class="outlook-maxline" points="${maxPts.join(" ")}"/>`;
+  svgInner += `<polyline class="outlook-minline" points="${minPts.join(" ")}"/>`;
+  days.forEach((d, i) => {
+    const x = xOf(i);
+    const yMaxPt = yOf(Number(d.temp_max_c));
+    const yMinPt = yOf(Number(d.temp_min_c));
+    svgInner += `<circle class="outlook-pt max" cx="${x.toFixed(1)}" cy="${yMaxPt.toFixed(1)}" r="3.5"/>`;
+    svgInner += `<circle class="outlook-pt min" cx="${x.toFixed(1)}" cy="${yMinPt.toFixed(1)}" r="3.5"/>`;
+    svgInner += `<text class="outlook-lbl max" x="${x.toFixed(1)}" y="${(yMaxPt - 8).toFixed(1)}" text-anchor="middle">${Number(d.temp_max_c).toFixed(1)}</text>`;
+    svgInner += `<text class="outlook-lbl min" x="${x.toFixed(1)}" y="${(yMinPt + 14).toFixed(1)}" text-anchor="middle">${Number(d.temp_min_c).toFixed(1)}</text>`;
+    svgInner += `<text class="outlook-daylbl" x="${x.toFixed(1)}" y="${H - 8}" text-anchor="middle">${_outlookFmtDay(d.target_date)}</text>`;
+  });
+  svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.innerHTML = svgInner;
+
+  days.forEach(d => {
+    const arrow = windArrow(d.wind_direction_deg);
+    const tr = document.createElement("tr");
+    tr.innerHTML = `<td>${_outlookFmtDay(d.target_date)}</td><td>${Number(d.temp_max_c).toFixed(1)}</td><td>${Number(d.temp_min_c).toFixed(1)}</td><td class="wind-arrow" title="${d.wind_direction_deg ?? ""}°">${arrow}</td>`;
+    tbody.appendChild(tr);
+  });
+
+  // Odznaka "ostra zmiana": najwiekszy dzien-do-dnia skok temp_max_c
+  // (>=5C w jedna strone) - to bezposrednia odpowiedz na pytanie
+  // uzytkownika "czy nasz synoptyk wylapuje ostra zmiane pogody".
+  let biggestDelta = 0, biggestIdx = -1;
+  for (let i = 1; i < maxVals.length; i++) {
+    const delta = maxVals[i] - maxVals[i - 1];
+    if (Math.abs(delta) > Math.abs(biggestDelta)) { biggestDelta = delta; biggestIdx = i; }
+  }
+  if (biggestIdx >= 0 && Math.abs(biggestDelta) >= 5) {
+    const kierunek = biggestDelta < 0 ? "ochłodzenie" : "ocieplenie";
+    const znak = biggestDelta > 0 ? "+" : "";
+    badge.innerHTML = `<span class="outlook-swing-badge">⚠️ ${kierunek} ${znak}${biggestDelta.toFixed(1)}°C do ${_outlookFmtDay(days[biggestIdx].target_date)}</span>`;
+  }
+}
+
 function renderRealBias(data) {
   const leads = Array.from({length: 7}, (_, i) => i);
   const note = document.getElementById("real-bias-note");
@@ -256,6 +396,27 @@ function renderRealBias(data) {
     data: { labels: leads, datasets: [{ label: "bias °C (realne, tylko gdy n>=" + data.min_samples + ")", data: biasVals, borderColor: "#4fd1c5", spanGaps: false }] },
     options: { scales: { y: { title: { display: true, text: "°C" } }, x: { title: { display: true, text: "lead_days" } } } }
   });
+}
+
+// Rezonans TIMDR - patrz arctic_synoptyk/resonance_calibration.py po
+// pelny opis kontraktu: status="insufficient_data" jest OCZEKIWANYM,
+// czestym stanem (30-dniowa retencja CSV, 10 stacji dzielacych limity
+// API) - panel pokazuje to wprost, nie ukrywa/nie udaje wyniku.
+function renderResonance(data) {
+  const note = document.getElementById("resonance-note");
+  const body = document.getElementById("resonance-body");
+  if (data.status === "calibrated") {
+    note.textContent = `✅ Skalibrowano: ${data.n_resonance_days} dni rezonansowych vs ${data.n_normal_days} normalnych (K=${data.k}).`;
+    body.innerHTML = `
+      <div class="stat"><span class="k">MAE dni rezonansowych</span><span class="v">${data.mae_resonance.toFixed(2)} °C</span></div>
+      <div class="stat"><span class="k">MAE dni normalnych</span><span class="v">${data.mae_normal.toFixed(2)} °C</span></div>
+      <div class="stat"><span class="k">Mnożnik niepewności</span><span class="v">${data.confidence_multiplier.toFixed(2)}×</span></div>
+      <div class="stat"><span class="k">Sugerowany próg K</span><span class="v">${data.recommended_k}</span></div>
+    `;
+  } else {
+    note.textContent = `⏳ Za mało sparowanych dni jeszcze (rezonans=${data.n_resonance_days}, normalne=${data.n_normal_days}) — to oczekiwane, nie błąd (patrz "${data.reason}").`;
+    body.innerHTML = `<div class="stat"><span class="k">Mnożnik niepewności (domyślny)</span><span class="v">${data.confidence_multiplier.toFixed(2)}×</span></div>`;
+  }
 }
 
 function renderDemoBias(data) {
@@ -359,7 +520,9 @@ function _withStation(url) {
 async function loadAll() {
   await Promise.all([
     loadSection(_withStation("/api/status"), renderStatus, "Status stacji"),
+    loadSection(_withStation("/api/forecast_outlook"), renderForecastOutlook, "Prognoza 7 dni"),
     loadSection(_withStation("/api/real_bias"), renderRealBias, "Trafność (realne)"),
+    loadSection(_withStation("/api/resonance"), renderResonance, "Rezonans TIMDR"),
     loadSection("/api/demo_bias", renderDemoBias, "Demo"),
     loadSection(_withStation("/api/latest_readings"), renderLatestReadings, "Surowe odczyty"),
   ]);
