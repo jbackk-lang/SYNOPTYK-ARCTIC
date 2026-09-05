@@ -23,6 +23,18 @@ Endpointy:
 - GET  /api/demo_bias  — to samo, ale na demo_synthetic_arctic_snapshots.csv
                          (SYNTETYCZNE dane) - zawsze jawnie opisane jako
                          demo, nigdy nie miesza się z /api/real_bias
+- GET  /api/resonance  — calibrate_resonance() (arctic_synoptyk/
+                         resonance_calibration.py) na PRAWDZIWYM
+                         arctic_forecast_snapshots.csv: czy dni oflagowane
+                         jako "rezonansowe" (proxy z temp_max_c/
+                         pressure_hpa/precip_mm/wind_kmh, patrz
+                         arctic_synoptyk/resonance.py) faktycznie miały
+                         wyższy błąd prognozy. status="insufficient_data"
+                         (confidence_multiplier zostaje 1.0) jest
+                         OCZEKIWANYM, częstym stanem większości stacji -
+                         patrz docstring resonance_calibration.py (10
+                         stacji, 30-dniowa retencja CSV) - nigdy nie
+                         udajemy skalibrowanego wyniku na garstce danych.
 - GET  /api/latest_readings — SUROWE, NIESPAROWANE wiersze z REAL_CSV (i
                          "prognoza", i "archiwum_openmeteo"), posortowane
                          od najnowszych. Cel: dać widoczność, że kolektor w
@@ -96,6 +108,7 @@ from fastapi.staticfiles import StaticFiles
 
 from arctic_synoptyk.bias import compute_lead_bias
 from arctic_synoptyk.offline import classify_staleness
+from arctic_synoptyk.resonance_calibration import calibrate_resonance
 from arctic_synoptyk.station import LONGYEARBYEN, HORNSUND, STATIONS, STATIONS_BY_NAME, STATIONS_NORTH, STATIONS_SOUTH
 from run_arctic import collect as _collect_arctic_data
 
@@ -208,6 +221,27 @@ def real_bias(station: str | None = None) -> dict:
             "lead_days, do śledzenia postępu - NIE traktować jako wynik trafności."
         ),
     }
+
+
+@app.get("/api/resonance")
+def resonance(station: str | None = None) -> dict:
+    """calibrate_resonance() na PRAWDZIWYM REAL_CSV dla wybranej stacji -
+    patrz "Endpointy" w docstringu modulu i arctic_synoptyk/
+    resonance_calibration.py po pelny opis kontraktu uczciwosci
+    (status="insufficient_data" -> confidence_multiplier zostaje 1.0,
+    nigdy udawanej kalibracji). Nieznana stacja -> 404, ten sam wzorzec
+    co pozostale endpointy `?station=` w tym pliku."""
+    st = _resolve_station(station)
+    result = calibrate_resonance(str(REAL_CSV), st.name)
+    result["station"] = st.name
+    result["note"] = (
+        "PROXY rezonansu liczony z kanalow temp_max_c/pressure_hpa/"
+        "precip_mm/wind_kmh (brak wilgotnosci - ten CSV jej nie loguje). "
+        "status='insufficient_data' jest oczekiwanym, czestym stanem przy "
+        "malej liczbie sparowanych dni na stacje (30-dniowa retencja CSV, "
+        "10 stacji dzielacych limity API) - NIE oznacza bledu."
+    )
+    return result
 
 
 @app.get("/api/demo_bias")
