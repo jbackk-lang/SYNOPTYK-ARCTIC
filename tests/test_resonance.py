@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 from datetime import date
+from statistics import mean, stdev
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
@@ -115,3 +116,59 @@ def test_channels_constant_has_no_humidity():
     # wilgotnosci - regression test, zeby ktos przypadkiem jej tu nie dopisal.
     assert "humidity" not in CHANNELS
     assert set(CHANNELS) == {"temp_max_c", "pressure_hpa", "precip_mm", "wind_kmh"}
+
+
+def _old_self_referential_flag(vals: list[float], idx: int) -> bool:
+    """Odtwarza CELOWO stara (NAPRAWIONA) wersje flag_resonance_days:
+    prog mean+/-2*std liczony na CALEJ probce, WLACZNIE z ocenianym
+    punktem - uzywana ponizej WYLACZNIE jako punkt odniesienia w tescie
+    regresyjnym na maskowanie, nie importowana z produkcyjnego kodu
+    (ktorego juz nie ma - patrz resonance.py:flag_resonance_days)."""
+    m = mean(vals)
+    s = stdev(vals)
+    v = vals[idx]
+    return v < (m - 2 * s) or v > (m + 2 * s)
+
+
+def test_flag_resonance_days_leave_one_out_avoids_masking_on_small_sample():
+    # Realistyczny scenariusz dla tego repo (30-dniowa retencja CSV / 10
+    # stacji - patrz docstring resonance_calibration.py): TYLKO 4 dni
+    # bazowe + 1 dzien z duzym skokiem na wszystkich 4 kanalach. Stara
+    # (samo-odnoszaca sie) wersja progu liczyla mean+/-2*std z WLASNEGO
+    # udzialu tego skoku w probce - przy n=5 jeden ekstremalny punkt
+    # potrafi sam zawyzyc wlasne std na tyle, ze NIGDY nie przekroczy
+    # progu, NIEZALEZNIE od tego, jak duzy jest skok (patrz ponizsza
+    # pętla po amplitudach - to jest dokladnie ten sam mechanizm
+    # maskowania, co znaleziony i naprawiony w FLIGHT-TRACKING-TIMDR/
+    # timdr_flight.py:twist_3d i opisany w GIA-TIMDR/docs/geometry/
+    # TIMDR_Trefoil_RealDataValidation.md).
+    base = {"temp_max_c": [5.0, 5.1, 4.9, 5.05],
+            "pressure_hpa": [1010.0, 1010.5, 1009.5, 1010.2],
+            "precip_mm": [0.0, 0.1, 0.05, 0.0],
+            "wind_kmh": [10.0, 10.2, 9.8, 10.1]}
+    for amplitude in (4, 6, 8, 12, 20):
+        real_by_date = {}
+        for i in range(4):
+            d = f"2026-08-{i+1:02d}"
+            real_by_date[d] = {ch: vals[i] for ch, vals in base.items()}
+        real_by_date["2026-08-20"] = {ch: vals[0] * amplitude for ch, vals in base.items()}
+
+        # Stara metoda: prog liczony na WSZYSTKICH 5 wartosciach danego
+        # kanalu (z ocenianym dniem wlacznie) - masking check.
+        old_anomalous = sum(
+            1 for ch, vals in base.items()
+            if _old_self_referential_flag(vals + [vals[0] * amplitude], 4)
+        )
+        assert old_anomalous < DEFAULT_K, (
+            f"amplituda={amplitude}: oczekiwano, ze stara (samo-odnoszaca sie) metoda "
+            f"NIE zauwazy anomalii (ponizej k={DEFAULT_K}) - to jest teza tego testu "
+            f"(maskowanie), uzyskano {old_anomalous} anomalnych kanalow"
+        )
+
+        # Naprawiona metoda (flag_resonance_days, leave-one-out): powinna
+        # wykryc rezonans NIEZALEZNIE od amplitudy w tym zakresie.
+        flags = flag_resonance_days(real_by_date, k=DEFAULT_K)
+        assert flags["2026-08-20"] is True, (
+            f"amplituda={amplitude}: naprawiona (leave-one-out) metoda powinna wykryc "
+            f"rezonans tam, gdzie stara go maskowala"
+        )
