@@ -52,6 +52,8 @@ DEFAULT_K = 3
 # uzywane w Krakowskim resonance_calibration.py) wymaga >= 2 punktow;
 # przyjmujemy >=3, zeby odchylenie nie bylo liczone na skrajnie malej
 # probce (2 punkty daja "std", ktore nie mowi nic sensownego o "normie").
+# Od naprawy leave-one-out (patrz flag_resonance_days) ten prog dotyczy
+# liczby POZOSTALYCH dni (bez ocenianego) - nie calego okna.
 MIN_POINTS_FOR_STATS = 3
 
 
@@ -99,31 +101,45 @@ def flag_resonance_days(real_by_date: dict[str, dict[str, float]], k: int = DEFA
     """PROXY rezonansu na danych dobowych - patrz docstring modulu. Zwraca
     {target_date: bool} dla kazdej daty obecnej w `real_by_date`: dzien
     jest rezonansowy, gdy >= k z DOSTEPNYCH tego dnia kanalow jest
-    anomalnych wzgledem mean +/- 2*std calego okna `real_by_date` (progi
-    liczone RAZ per kanal na calym oknie, nie per dzien - tak samo jak w
-    Krakowie). Pusty dict, gdy `real_by_date` jest pusty."""
+    anomalnych wzgledem mean +/- 2*std OKNA Z POMINIECIEM TEGO DNIA
+    (leave-one-out). Pusty dict, gdy `real_by_date` jest pusty.
+
+    NAPRAWIONE (Pattern B - maskowanie przez male/samo-odnoszace sie
+    okno, znalezione przy audycie ekosystemu TIMDR pod katem progow
+    liczonych z tej samej probki, ktora sie testuje - patrz GIA-TIMDR/
+    docs/geometry/TIMDR_Trefoil_MissingCoordinateSolver.md i naprawa w
+    FLIGHT-TRACKING-TIMDR/timdr_flight.py:twist_3d dla pelnego opisu
+    tego samego mechanizmu w innym repo): poprzednia wersja liczyla
+    mean+/-2*std RAZ per kanal na calym oknie WLACZNIE z ocenianym
+    dniem - genuinny, duzy skok tego dnia zawyzal wlasne std, co przy
+    malej liczbie realnych pomiarow (10 stacji dzielacych 30-dniowa
+    retencje - patrz resonance_calibration.py) moglo maskowac akurat
+    najsilniejsze anomalie. Teraz kazdy dzien jest oceniany wzgledem
+    progu policzonego z POZOSTALYCH dni (bez niego samego) - dokladnie
+    ten sam wzorzec naprawy, co w FLIGHT-TRACKING-TIMDR."""
     if not real_by_date:
         return {}
 
-    thresholds: dict[str, tuple[float, float]] = {}
-    for ch in CHANNELS:
-        series = _channel_series(real_by_date, ch)
-        if len(series) < MIN_POINTS_FOR_STATS:
-            continue
-        vals = list(series.values())
-        m = mean(vals)
-        s = stdev(vals)
-        if s == 0:
-            continue
-        thresholds[ch] = (m - 2 * s, m + 2 * s)
+    channel_series = {ch: _channel_series(real_by_date, ch) for ch in CHANNELS}
 
     result: dict[str, bool] = {}
     for target_date, values in real_by_date.items():
         anomaly_count = 0
-        for ch, (low, high) in thresholds.items():
+        for ch in CHANNELS:
             v = values.get(ch)
             if v is None:
                 continue
+            series = channel_series[ch]
+            if target_date not in series:
+                continue
+            others = [val for d, val in series.items() if d != target_date]
+            if len(others) < MIN_POINTS_FOR_STATS:
+                continue
+            m = mean(others)
+            s = stdev(others)
+            if s == 0:
+                continue
+            low, high = m - 2 * s, m + 2 * s
             if v < low or v > high:
                 anomaly_count += 1
         result[target_date] = anomaly_count >= k
