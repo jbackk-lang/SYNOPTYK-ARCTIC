@@ -176,6 +176,12 @@
   <table id="real-table"><thead><tr><th>lead_days</th><th>n (par)</th><th>bias °C</th><th>MAE °C</th><th>status</th></tr></thead><tbody></tbody></table>
 </div>
 
+<div class="panel" style="margin-bottom:20px;">
+  <h2>Rezonans TIMDR (kalibracja na danych realnych)</h2>
+  <div id="resonance-note" class="empty-note">ładowanie…</div>
+  <div id="resonance-body"></div>
+</div>
+
 <div class="panel">
   <h2>Demo — dane SYNTETYCZNE (mechanizm, nie pomiar)</h2>
   <div class="warn-banner">⚠️ Poniższe liczby pochodzą z <code>demo_synthetic_arctic_snapshots.csv</code> — wygenerowane sztucznie przez <code>demo_synthetic_fill.py</code>, żeby pokazać kształt wyniku, gdy danych już wystarczy. To NIE jest pomiar rzeczywistej trafności stacji Longyearbyen.</div>
@@ -184,7 +190,7 @@
 </div>
 
 <footer>
-  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/stations, /api/status, /api/forecast_outlook, /api/real_bias, /api/demo_bias, /api/latest_readings
+  SYNOPTYK-ARCTIC · appka lokalna (FastAPI) · endpointy: /api/stations, /api/status, /api/forecast_outlook, /api/real_bias, /api/resonance, /api/demo_bias, /api/latest_readings
 </footer>
 
 <script>
@@ -392,6 +398,27 @@ function renderRealBias(data) {
   });
 }
 
+// Rezonans TIMDR - patrz arctic_synoptyk/resonance_calibration.py po
+// pelny opis kontraktu: status="insufficient_data" jest OCZEKIWANYM,
+// czestym stanem (30-dniowa retencja CSV, 10 stacji dzielacych limity
+// API) - panel pokazuje to wprost, nie ukrywa/nie udaje wyniku.
+function renderResonance(data) {
+  const note = document.getElementById("resonance-note");
+  const body = document.getElementById("resonance-body");
+  if (data.status === "calibrated") {
+    note.textContent = `✅ Skalibrowano: ${data.n_resonance_days} dni rezonansowych vs ${data.n_normal_days} normalnych (K=${data.k}).`;
+    body.innerHTML = `
+      <div class="stat"><span class="k">MAE dni rezonansowych</span><span class="v">${data.mae_resonance.toFixed(2)} °C</span></div>
+      <div class="stat"><span class="k">MAE dni normalnych</span><span class="v">${data.mae_normal.toFixed(2)} °C</span></div>
+      <div class="stat"><span class="k">Mnożnik niepewności</span><span class="v">${data.confidence_multiplier.toFixed(2)}×</span></div>
+      <div class="stat"><span class="k">Sugerowany próg K</span><span class="v">${data.recommended_k}</span></div>
+    `;
+  } else {
+    note.textContent = `⏳ Za mało sparowanych dni jeszcze (rezonans=${data.n_resonance_days}, normalne=${data.n_normal_days}) — to oczekiwane, nie błąd (patrz "${data.reason}").`;
+    body.innerHTML = `<div class="stat"><span class="k">Mnożnik niepewności (domyślny)</span><span class="v">${data.confidence_multiplier.toFixed(2)}×</span></div>`;
+  }
+}
+
 function renderDemoBias(data) {
   const note = document.getElementById("demo-bias-note");
   if (data.error) {
@@ -495,6 +522,7 @@ async function loadAll() {
     loadSection(_withStation("/api/status"), renderStatus, "Status stacji"),
     loadSection(_withStation("/api/forecast_outlook"), renderForecastOutlook, "Prognoza 7 dni"),
     loadSection(_withStation("/api/real_bias"), renderRealBias, "Trafność (realne)"),
+    loadSection(_withStation("/api/resonance"), renderResonance, "Rezonans TIMDR"),
     loadSection("/api/demo_bias", renderDemoBias, "Demo"),
     loadSection(_withStation("/api/latest_readings"), renderLatestReadings, "Surowe odczyty"),
   ]);

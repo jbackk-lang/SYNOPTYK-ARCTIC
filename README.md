@@ -127,6 +127,7 @@ to, co już jest na dysku.
 | `GET /api/real_bias` | oficjalny bias/MAE (>=5 par) + surowe liczniki n |
 | `GET /api/demo_bias` | bias/MAE na danych syntetycznych + disclaimer |
 | `GET /api/latest_readings` | ostatnie N surowych, niesparowanych wierszy z CSV — widoczność że kolektor pisze dane, niezależnie od progu `min_samples` |
+| `GET /api/resonance` | kalibracja sygnału TIMDR "rezonans" (`arctic_synoptyk/resonance_calibration.py`) na prawdziwym CSV dla wybranej stacji — patrz "Rezonans (proxy TIMDR)" niżej |
 | `POST /api/collect` | uruchamia realne pobranie z Open-Meteo dla jednej stacji i dopisanie do CSV, zwraca to, co zebrało (albo `forecast_error`/`archive_error`, jeśli sieć zawiodła) |
 
 `/api/status`, `/api/real_bias`, `/api/latest_readings`, `POST /api/collect`
@@ -183,6 +184,38 @@ południowa jest wybrana (liczone z `ArcticStation.hemisphere`, nie z
 dopasowania nazwy — dotyczy więc też Amundsen-Scott, mimo że w jej
 nazwie nie ma słowa "Antarktyda").
 
+## Rezonans (proxy TIMDR) — kalibracja
+
+`arctic_synoptyk/resonance.py` liczy PROXY sygnału "rezonans" (TIMDR) na
+danych dobowych: dzień jest "rezonansowy", gdy ≥K=3 z 4 dostępnych kanałów
+(`temp_max_c`, `pressure_hpa`, `precip_mm`, `wind_kmh`) jest anomalnych
+względem mean±2·std reszty okna (leave-one-out — nie licząc dnia
+ocenianego, żeby duży skok nie zawyżał własnego progu). `GET /api/resonance`
+(`arctic_synoptyk/resonance_calibration.py::calibrate_resonance`) sprawdza
+NA ŻYWO, czy dni rezonansowe faktycznie miały wyższy błąd prognozy (MAE)
+niż dni bez rezonansu — dopóki tego nie sprawdzono, założenie "rezonans →
+większy błąd → powinien poszerzać niepewnicę" było niezweryfikowane.
+Diagnostyczne narzędzie do podejrzenia stanu wszystkich stacji naraz:
+`python check_resonance_status.py`.
+
+**Uczciwy wynik na aktualnych danych (2026-09-07, 10 stacji): status
+`insufficient_data` dla WSZYSTKICH stacji** — w ~150 sumarycznych
+dniach-stacji rezonans (K=3) wystąpił dokładnie RAZ (McMurdo, 2026-08-28),
+i akurat ten dzień nie ma sparowanej prognozy (kolekcja prognoz zaczęła
+się później niż archiwum rzeczywistych danych dla tej stacji) — więc
+nawet ten jeden przypadek wypada z liczenia. To NIE jest błąd
+implementacji (kalibracja poprawnie odmawia fałszywej pewności zamiast
+"kalibrować się" na garstce przypadków — patrz `_insufficient()`), tylko
+strukturalne ograniczenie: **przy tym progu K i 30-dniowej retencji CSV,
+próg `min_samples_per_group=8` dni rezonansowych może nigdy nie zostać
+osiągnięty** — oczekiwana liczba dni rezonansowych w oknie 30 dni to rząd
+wielkości 1-2, więc potrzeba raczej 150-250 dni skumulowanej historii
+(albo niższego K), zanim `calibrate_resonance` będzie miało w ogóle
+szansę zwrócić `"calibrated"`. Dokładnie ten sam wzorzec "test bez mocy ≠
+brak efektu", co realny wynik dla Krakowa w `timdr-signal-framework`
+(§3/§10) — tam też p≈1 oznaczało zero kwalifikujących się zdarzeń, nie
+potwierdzony brak rezonansu.
+
 ## Backtest historyczny (bez zapisu do CSV)
 
 `backfill_real_history.py` (patrz "Szybki start" wyżej) jest tym, czego
@@ -210,7 +243,7 @@ retencja).
 pytest -v
 ```
 
-Wszystkie testy przechodzą (stan na 2026-08-31: 93/93) — w tym część
+Wszystkie testy przechodzą (stan na 2026-09-07: 113/113) — w tym część
 bezpośrednio na prawdziwych odpowiedziach API z 2026-08-26
 (`test_fetch.py`), na izolowanych/tymczasowych CSV (`test_webapp.py`,
 monkeypatch `webapp.app.REAL_CSV`/`DEMO_CSV`, nigdy nie dotyka prawdziwych
@@ -228,11 +261,14 @@ arctic_synoptyk/
     retention.py          — przycina CSV do ostatnich 30 dni, stare wiersze do archiwum (nic nie kasuje)
     offline.py           — lokalny bufor, wskaźnik nieaktualności, degradowana estymacja
     connectivity_sim.py  — symulacja wielodniowej przerwy w łączności
+    resonance.py          — proxy sygnału TIMDR "rezonans" (K z 4 kanałów, leave-one-out mean±2std)
+    resonance_calibration.py — kalibracja rezonansu na realnym MAE (patrz "Rezonans (proxy TIMDR)")
 run_arctic.py            — codzienny runner (collect() + CLI; uruchamiać lokalnie, nie w sandboksie)
 fetch_arctic_test.py     — samodzielny skrypt testowy (bez zależności)
 backfill_real_history.py — jednorazowe zasilenie CSV realną historią (patrz "Szybki start"), uruchamiać lokalnie
 backtest_real.py         — jak wyżej, ale tylko na konsolę, nic nie zapisuje, uruchamiać lokalnie
 demo_synthetic_fill.py   — generuje syntetyczne dane demo (osobny CSV/stacja)
+check_resonance_status.py — jednorazowy podgląd stanu kalibracji rezonansu dla wszystkich 10 stacji
 webapp/
     app.py               — FastAPI: status/real_bias/demo_bias/latest_readings/collect (patrz tabela wyżej)
     static/index.html    — dashboard (JS + Chart.js zwendorowany lokalnie, czyta API na żywo)
@@ -266,6 +302,11 @@ HISTORIA_BUDOWY.md       — pełna historia decyzji i naprawionych błędów
   wzorzec przyciągania do punktu siatki).
 - Brak integracji z fizycznym sprzętem satelitarnym (Iridium/Argos) —
   `connectivity_sim.py` tylko symuluje harmonogram połączeń.
+- Kalibracja rezonansu (`GET /api/resonance`) zwraca `insufficient_data`
+  dla wszystkich 10 stacji przy obecnej 30-dniowej retencji CSV — patrz
+  "Rezonans (proxy TIMDR) — kalibracja" wyżej po pełne wyjaśnienie
+  (strukturalne, nie błąd: próg K=3 daje ~1-2 dni rezonansowe na 30 dni,
+  a próg kalibracji wymaga ≥8).
 - `arctic_forecast_snapshots.csv` pokazuje tylko ostatnie 30 dni
   (retencja, patrz wyżej) — pełna historia jest w
   `arctic_forecast_snapshots_archive.csv`, ale `compute_lead_bias()`/

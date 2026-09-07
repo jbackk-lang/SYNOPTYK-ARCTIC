@@ -536,6 +536,92 @@ def test_index_page_has_forecast_outlook_panel():
     assert "/api/forecast_outlook" in r.text
 
 
+# ── Rezonans TIMDR (GET /api/resonance) ─────────────────────────────────
+
+def test_resonance_endpoint_insufficient_data_is_the_common_case():
+    """Z odrobina danych (za malo sparowanych dni w kazdej z grup)
+    endpoint ma zwrocic status='insufficient_data' i confidence_multiplier
+    NIEZMIENIONY (1.0) - to jest REALISTYCZNY, oczekiwany stan wiekszosci
+    stacji tego repo (30-dniowa retencja CSV, 10 stacji) - patrz docstring
+    arctic_synoptyk/resonance_calibration.py. Endpoint nigdy nie ma udawac
+    skalibrowanego wyniku na garstce danych."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-27", 6.2)],
+                         issue_date=date(2026, 8, 26), source="prognoza")
+        append_snapshot(real_csv, STATION, [_forecast_row("2026-08-27", 7.0)],
+                         issue_date=date(2026, 8, 27), source="archiwum_openmeteo")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            r = client.get(f"/api/resonance?station={STATION}")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["status"] == "insufficient_data"
+            assert body["confidence_multiplier"] == 1.0
+            assert body["station"] == STATION
+            assert "note" in body
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_resonance_endpoint_calibrated_with_enough_paired_data():
+    """Z wystarczajaco danymi w obu grupach (rezonans/normalne) endpoint ma
+    zwrocic status='calibrated' z sensownym confidence_multiplier (1.0-3.0)."""
+    with tempfile.TemporaryDirectory() as d:
+        real_csv, demo_csv = _client_with_real_csv(d)
+
+        def _target_and_issue(c):
+            month, dom = (c // 28) + 1, (c % 28) + 1
+            target = f"2026-{month:02d}-{dom:02d}"
+            issue_dom = max(1, dom - 1)
+            issue = date(2026, month, issue_dom)
+            return target, issue
+
+        # 8 dni "rezonansowych" (skok na wszystkich 4 kanalach + duzy blad prognozy)
+        for c in range(8):
+            target, issue = _target_and_issue(c)
+            append_snapshot(real_csv, STATION,
+                             [{"date": target, "temp_min_c": 37.0, "temp_avg_c_approx": 38.5,
+                               "temp_max_c": 40.0, "precip_mm": 500.0, "wind_kmh": 300.0,
+                               "pressure_hpa": 700.0}],
+                             issue_date=issue, source="prognoza")
+            append_snapshot(real_csv, STATION,
+                             [{"date": target, "temp_min_c": 77.0, "temp_avg_c_approx": 78.5,
+                               "temp_max_c": 80.0, "precip_mm": 500.0, "wind_kmh": 300.0,
+                               "pressure_hpa": 700.0}],
+                             issue_date=issue, source="archiwum_openmeteo")
+        # 40 dni "spokojnych" (male, stale wartosci, maly blad prognozy) -
+        # rozlozone na kolejne daty (c=8..47), zeby nie przekroczyc dlugosci
+        # miesiaca (patrz _target_and_issue: miesiac/dzien liczone z c//28/c%28).
+        for c in range(8, 48):
+            target, issue = _target_and_issue(c)
+            append_snapshot(real_csv, STATION, [_forecast_row(target, 4.5)],
+                             issue_date=issue, source="prognoza")
+            append_snapshot(real_csv, STATION, [_forecast_row(target, 5.0)],
+                             issue_date=issue, source="archiwum_openmeteo")
+        old_real, old_demo = app_module.REAL_CSV, app_module.DEMO_CSV
+        app_module.REAL_CSV, app_module.DEMO_CSV = Path(real_csv), Path(demo_csv)
+        try:
+            client = TestClient(app_module.app)
+            r = client.get(f"/api/resonance?station={STATION}")
+            assert r.status_code == 200
+            body = r.json()
+            assert body["status"] == "calibrated"
+            assert body["n_resonance_days"] == 8
+            assert body["n_normal_days"] == 40
+            assert 1.0 <= body["confidence_multiplier"] <= 3.0
+        finally:
+            app_module.REAL_CSV, app_module.DEMO_CSV = old_real, old_demo
+
+
+def test_resonance_endpoint_unknown_station_404():
+    r_client = TestClient(app_module.app)
+    r = r_client.get("/api/resonance?station=Nieistniejaca_Stacja")
+    assert r.status_code == 404
+
+
 def test_collect_endpoint_uses_requested_station_not_always_longyearbyen():
     """POST /api/collect?station=<X> ma wywolac collect() z ArcticStation
     odpowiadajacym X, nie zawsze LONGYEARBYEN - to byla poprzednia,
